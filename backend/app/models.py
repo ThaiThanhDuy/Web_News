@@ -185,6 +185,11 @@ class Item(Base):
     relevance: Mapped[float | None] = mapped_column(Float)  # R, 0-100
     sentiment: Mapped[str | None] = mapped_column(String(20))
     hotness_score: Mapped[float] = mapped_column(Float, server_default="0", index=True)
+    # Accent-folded search index (app/services/search_index.py): title first,
+    # then takeaway, bullets, keywords and topic name; `tags` holds the
+    # folded keywords as "|iphone18|chipa20|" for #hashtag matching.
+    search_text: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[str | None] = mapped_column(Text)
     enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=utcnow

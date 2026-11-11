@@ -16,6 +16,7 @@ from app.pipeline.steps import enqueue_next
 from app.services import webpush
 from app.services.clustering import best_enriched_member, elect_primary
 from app.services.hotness import compute_hotness
+from app.services.search_index import index_item
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ def handle_summarize(db: Session, job: ClaimedJob) -> None:
     item.status = ItemStatus.ENRICHED
     item.status_reason = None
     item.enriched_at = datetime.now(timezone.utc)
+    index_item(item, result.output, item.topic.name if item.topic else None)
     db.flush()
 
     source_count = 1

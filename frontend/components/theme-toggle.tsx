@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 
+import { headerIconButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 export function ThemeToggle() {
@@ -23,7 +24,8 @@ export function ThemeToggle() {
     <button
       onClick={toggle}
       aria-label="Chuyển giao diện sáng/tối"
-      className="group relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
+      title="Giao diện sáng/tối"
+      className={cn(headerIconButton, "overflow-hidden")}
     >
       <Sun
         className={cn(

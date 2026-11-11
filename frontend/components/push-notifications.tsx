@@ -16,6 +16,7 @@ import {
   unsubscribe,
 } from "@/lib/push";
 import type { Category } from "@/lib/types";
+import { headerIconButton } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 type Availability = "loading" | "unsupported" | "needs-install" | "server-off" | "unreachable" | "denied" | "ready";
@@ -142,21 +143,19 @@ export function PushNotifications({ categories }: { categories: Category[] }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "relative flex h-9 w-9 items-center justify-center rounded-xl border border-border/60 transition hover:bg-primary/10",
-          subscribed && "text-primary"
-        )}
+        className={cn(headerIconButton, subscribed && "text-primary hover:text-primary")}
         aria-label="Thông báo"
+        title="Thông báo"
         aria-expanded={open}
       >
         <Icon className="h-4 w-4" />
-        {subscribed && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary" />}
+        {subscribed && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />}
       </button>
 
       {open && (
         // Positioning lives on this wrapper: .glass-card sets position: relative
         // outside Tailwind's layers and would override `absolute`.
-        <div className="absolute right-0 top-11 z-40 w-[min(20rem,calc(100vw-2rem))]">
+        <div className="absolute right-0 top-10 z-40 w-[min(20rem,calc(100vw-2rem))]">
           <div className="glass-card space-y-3 rounded-2xl bg-background/95 p-4 shadow-xl">
             <div>
               <div className="text-sm font-bold">Thông báo tin nóng</div>

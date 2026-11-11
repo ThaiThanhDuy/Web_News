@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Lets a verification build go to a separate folder (NEXT_DIST_DIR=.next-check
+  // npm run build) without clobbering the .next of a running `next dev`.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   images: {
     // Thumbnails come from RSS feeds / og:image of the scraped sources, whose
     // CDN subdomains vary and can change at any time. next/image throws a

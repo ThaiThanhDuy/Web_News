@@ -84,3 +84,21 @@ class PushStatusOut(BaseModel):
 class PushConfigOut(BaseModel):
     enabled: bool
     public_key: str | None = None
+
+
+# --------------------------------------------------------------- search
+
+
+class SearchOut(BaseModel):
+    query: str
+    # Items matching every word / #hashtag of the query (accent-insensitive).
+    items: list[ArticleOut]
+    # Semantically close items that don't contain the words (embeddings).
+    related: list[ArticleOut]
+    topics: list[CategoryOut]
+    # Hashtag suggestions drawn from the matching items' keywords.
+    tags: list[str]
+
+
+class TrendingOut(BaseModel):
+    tags: list[str]

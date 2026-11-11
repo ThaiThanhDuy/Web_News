@@ -1,9 +1,12 @@
+"use client";
+
 import { ArrowUpRight, Flame, Play } from "lucide-react";
 
 import { ArticleThumbnail } from "@/components/article-thumbnail";
 import { SentimentBadge } from "@/components/sentiment-badge";
 import { SourceAvatar } from "@/components/source-avatar";
 import { getCategoryMeta } from "@/lib/category-meta";
+import { openSearch } from "@/lib/search";
 import { relativeTimeVi } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Article } from "@/lib/types";
@@ -81,15 +84,18 @@ export function FeedPost({ article, priority = false }: { article: Article; prio
       {article.keywords && article.keywords.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {article.keywords.slice(0, 5).map((kw) => (
-            <span
+            <button
               key={kw}
+              type="button"
+              onClick={() => openSearch(`#${kw}`)}
+              title={`Tìm tin có #${kw}`}
               className={cn(
-                "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors",
+                "rounded-full px-2.5 py-0.5 text-xs font-medium transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm hover:brightness-95 motion-reduce:transform-none",
                 meta.chip
               )}
             >
               #{kw}
-            </span>
+            </button>
           ))}
         </div>
       )}

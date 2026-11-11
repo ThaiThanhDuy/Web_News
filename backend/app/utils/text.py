@@ -122,3 +122,21 @@ def detect_language(value: str) -> str:
         return "vi"
     ascii_letters = sum(1 for c in letters if c.isascii())
     return "en" if ascii_letters / len(letters) > 0.95 else "other"
+
+
+# ---------------------------------------------------------------- search
+
+
+def fold(value: str | None) -> str:
+    """Lowercase, accent-free form for search: "Điện thoại" -> "dien thoai",
+    so queries match with or without Vietnamese diacritics."""
+    if not value:
+        return ""
+    decomposed = unicodedata.normalize("NFD", value.lower().replace("đ", "d").replace("Đ", "d"))
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(stripped.split())
+
+
+def fold_tag(value: str | None) -> str:
+    """Hashtag form: folded with spaces removed ("iPhone 18" -> "iphone18")."""
+    return fold(value).replace(" ", "")

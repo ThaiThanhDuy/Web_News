@@ -1,3 +1,4 @@
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,7 +7,7 @@ from sqlalchemy import inspect
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.routers import articles, meta, push
+from app.routers import articles, meta, push, search
 from app.seed import seed_sources_and_topics
 
 
@@ -17,6 +18,12 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Database schema missing — run `alembic upgrade head` in backend/ first.")
     with SessionLocal() as db:
         seed_sources_and_topics(db)
+    if settings.EMBEDDINGS_ENABLED:
+        # Load the embedding model in the background so the first search
+        # with "related" results doesn't pay the multi-second load.
+        from app.services.embeddings import warm_up
+
+        threading.Thread(target=warm_up, name="embeddings-warmup", daemon=True).start()
     yield
 
 
@@ -32,6 +39,7 @@ app.add_middleware(
 app.include_router(meta.router)
 app.include_router(articles.router)
 app.include_router(push.router)
+app.include_router(search.router)
 
 
 @app.get("/health")

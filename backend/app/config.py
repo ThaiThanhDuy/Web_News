@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 384
     CLUSTER_WINDOW_HOURS: int = 48
     CLUSTER_DISTANCE_THRESHOLD: float = 0.25
+    # Search "related" results: max cosine distance between the query's
+    # embedding and an item's (needs EMBEDDINGS_ENABLED; the API process
+    # then loads the embedding model too, ~0.5GB).
+    SEARCH_RELATED_MAX_DISTANCE: float = 0.5
 
     # ------------------------------------------------------------- filters
     MIN_TITLE_CHARS: int = 10

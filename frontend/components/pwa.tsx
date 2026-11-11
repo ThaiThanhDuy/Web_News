@@ -5,6 +5,7 @@ import { Download, WifiOff } from "lucide-react";
 
 import { IosInstallGuide } from "@/components/ios-install-guide";
 import { isIos, isStandalone, swUrl } from "@/lib/push";
+import { headerIconButton } from "@/lib/ui";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -61,11 +62,11 @@ export function InstallButton() {
           await deferred.userChoice;
           setDeferred(null);
         }}
-        className="flex items-center gap-1.5 rounded-xl border border-border/60 px-3 py-1.5 text-sm font-medium transition hover:bg-primary/10"
-        aria-label="Cài đặt ứng dụng"
+        className={headerIconButton}
+        aria-label="Cài ứng dụng"
+        title="Cài ứng dụng"
       >
         <Download className="h-4 w-4" />
-        <span className="hidden sm:inline">Cài ứng dụng</span>
       </button>
       <IosInstallGuide open={iosGuide} onClose={() => setIosGuide(false)} />
     </>

@@ -125,7 +125,7 @@ export function Feed({
   return (
     <div className="relative">
       {newCount > 0 && (
-        <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 animate-fade-in">
+        <div className="fixed left-1/2 top-28 z-30 -translate-x-1/2 animate-fade-in">
           <button
             onClick={loadNew}
             disabled={loadingNew}
