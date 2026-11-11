@@ -49,3 +49,38 @@ class ArticlePage(BaseModel):
     page_size: int
     total: int
     has_more: bool
+
+
+# ------------------------------------------------------------- web push
+
+
+class PushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscriptionIn(BaseModel):
+    """The browser's PushSubscription.toJSON()."""
+
+    endpoint: str
+    keys: PushKeys
+
+
+class PushSubscribeRequest(BaseModel):
+    subscription: PushSubscriptionIn
+    # Topic slugs; empty = every topic.
+    topics: list[str] = []
+
+
+class PushEndpointRequest(BaseModel):
+    endpoint: str
+
+
+class PushStatusOut(BaseModel):
+    subscribed: bool
+    topics: list[str] = []
+
+
+class PushConfigOut(BaseModel):
+    enabled: bool
+    public_key: str | None = None

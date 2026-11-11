@@ -1,189 +1,139 @@
 # Tech Digest — Trang tin công nghệ tổng hợp bằng AI
 
-Tự động cào tin từ **VnExpress**, **GenK**, **VietnamNet**, **TechCrunch**, **Wired** và **Engadget**,
-dùng AI mở chạy tại chỗ (qua Ollama) để tóm tắt, trích từ khóa, phân loại, phân tích cảm xúc — rồi
-hiển thị dưới dạng feed 1 cột kiểu mạng xã hội, cuộn vô hạn. Khi nhiều nguồn cùng đưa tin một chủ đề,
-hệ thống tự động ẩn bớt, chỉ giữ lại bản từ nguồn uy tín hơn (xem mục "Lọc trùng lặp" bên dưới). Mỗi
-bài luôn có nút link thẳng về bài gốc. Không có đăng nhập, like, comment, bookmark hay share — chỉ đọc.
+Tự động cào tin từ **VnExpress**, **GenK**, **VietnamNet**, **TechCrunch**, **Wired**, **Engadget** và
+một số kênh YouTube công nghệ. AI (Groq, `gpt-oss-20b`) phân loại rồi tóm tắt 3 ý chính bằng tiếng Việt.
+Kết quả hiển thị dưới dạng feed 1 cột, cuộn vô hạn. Tin trùng giữa các nguồn được gộp lại, chỉ giữ bản
+từ nguồn uy tín hơn. Mỗi bài có link thẳng về bài gốc. Web là PWA: cài được lên điện thoại, đọc lại tin
+đã xem khi offline, và nhận thông báo đẩy (Web Push) theo chuyên mục.
 
 ## Kiến trúc
 
 ```text
-┌─────────────┐      ┌──────────────┐      ┌───────────────────┐
-│  Next.js UI │─────▶│  FastAPI     │─────▶│ PostgreSQL+pgvector│
-│  (SSR/ISR)  │ REST │  (read API)  │      │  articles/sources  │
-└─────────────┘      └──────────────┘      └───────────────────┘
-                                                      ▲
-                      ┌──────────────┐                │
-                      │ Celery beat  │  every 10 min  │
-                      │ + worker     │────────────────┘
-                      └──────┬───────┘
-                             │ 1) feedparser (RSS) / JSON-LD (VietnamNet)
-                             │ 2) trafilatura (clean text)
-                             │ 3) Ollama LLM (JSON: summary/keywords/category/sentiment)
-                             │ 4) sentence-transformers (embedding, free, local)
-                             │ 5) pgvector cosine search → cross-source clustering
-                             │ 6) dedup: keep only the highest-priority source per cluster
-                             │ 7) hotness score = f(freshness, cross-source reach, AI score)
-                      ┌──────┴───────┐
-                      │    Redis     │  (Celery broker/result backend)
-                      └──────────────┘
+ Next.js PWA ──REST──▶ FastAPI ──▶ PostgreSQL + pgvector ◀── worker (python -m app.worker)
+ (feed, SW, push)       (đọc)       items, enrichments,         │  scheduler (1 leader / advisory lock)
+                                    jobs (pool việc), ...       │  7 queue, mỗi queue N luồng
+                                                                ▼
+                                       Redis: hạn mức token Groq, giãn cách theo tên miền, robots.txt
 ```
 
-- **Frontend**: Next.js (App Router) + Tailwind CSS. Server Components fetch the API with
-  `next.revalidate` (ISR) — no client JS needed for the initial feed.
-- **Backend**: FastAPI, read-only REST API (`/api/articles`, `/api/articles/hot`,
-  `/api/articles/new-count`, `/api/categories`, `/api/sources`).
-- **Database**: PostgreSQL + `pgvector` — embeddings are used to detect the same story covered by
-  multiple outlets (clustering), which feeds into the hotness score.
-- **Task queue**: Redis + Celery (beat schedules the scrape every 10 min, worker runs the pipeline
-  per article: extract → summarize → embed → cluster → score; plus periodic hotness recompute and
-  old-article cleanup).
-- **AI provider**: a local open model served by [Ollama](https://ollama.com) — private, free, no
-  rate limit, no API key. Speed depends entirely on this machine's CPU/GPU (see "Chạy AI tại chỗ"
-  below). Embeddings also run locally via `sentence-transformers`.
+Mọi việc nền nằm trong **một pool chung là bảng `jobs`** của Postgres, chia theo 7 queue. Worker tự lấy
+việc khi rảnh bằng `FOR UPDATE SKIP LOCKED` kèm lease, nên thêm worker (thêm luồng hoặc thêm máy) không
+cần sửa code. Kết quả của một bước, việc đánh dấu `done` và job của bước sau được ghi **trong cùng
+một transaction**, nên không có chuyện lưu dữ liệu xong mà mất job.
 
-All 6 RSS/scrape sources were verified working:
+| Queue | Job | Việc |
+| --- | --- | --- |
+| `fetch` | `fetch.source`, `fetch.item` | Connector lấy item mới; tải trang bài, tách nội dung chính, lưu dữ liệu thô `.json.gz` |
+| `parse` | `parse.item` | Chuẩn hóa, nhận diện ngôn ngữ, chống trùng chính xác (SHA-256) |
+| `filter` | `filter.item` | Lọc rule, chống gần trùng (SimHash), embedding + gom cụm cùng sự kiện |
+| `ai_fast` | `ai.classify` | `gpt-oss-20b`: chuyên mục, độ liên quan, sắc thái |
+| `ai_deep` | `ai.summarize` | `gpt-oss-20b`: 3 ý chính, câu tóm tắt, từ khóa |
+| `deliver` | `deliver.fanout`, `deliver.send` | Web Push theo chuyên mục đã đăng ký |
+| `maintenance` | `maint.*` | Trả job hết lease, tính lại điểm hot, xóa dữ liệu hết hạn, reconcile |
 
-| Source     | Feed URL                                   |
-|------------|---------------------------------------------|
-| VnExpress  | `https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss` |
-| GenK       | `https://genk.vn/rss/home.rss` (requires a browser User-Agent, already handled) |
-| VietnamNet | `https://vietnamnet.vn/cong-nghe` (page's JSON-LD, not RSS — see below) |
-| TechCrunch | `https://techcrunch.com/feed/` |
-| Wired      | `https://www.wired.com/feed/rss` |
-| Engadget   | `https://www.engadget.com/rss.xml` |
+Vòng đời một item: `discovered → fetched → parsed → ready → classified → enriched`, hoặc dừng ở
+`filtered` / `duplicate` / `failed`. Mỗi trạng thái chưa kết thúc có đúng một job tiếp theo
+(`app/pipeline/steps.py`); job `maint.reconcile` tự tạo lại job cho item nào bị kẹt.
 
-TechCrunch's RSS carries no thumbnail at all — the scraper falls back to the article page's
-`og:image` meta tag in that case (see `scraper/content_extractor.py`).
+### Thu thập dữ liệu (connector)
 
-VietnamNet's own `cong-nghe.rss` feed has been stuck returning the same year-old items for a long
-time (not actually refreshed), so `scraper/vietnamnet_scraper.py` reads the category page's
-schema.org JSON-LD "latest articles" block instead, which VietnamNet does keep current.
+Mỗi loại nguồn là một connector cùng interface (`validate` / `fetch` / `health`, xem
+`app/connectors/`). Connector chỉ lấy và chuẩn hóa, không gọi AI, không ghi DB. Cursor của nguồn
+(`ETag`, `Last-Modified`) chỉ được cập nhật sau khi item của lần chạy đã ghi thành công.
 
-## Lọc trùng lặp (dedup)
+| Nguồn | Connector | Ghi chú |
+| --- | --- | --- |
+| VnExpress, GenK, TechCrunch, Wired, Engadget | `rss` | GenK cần User-Agent kiểu trình duyệt (đã xử lý) |
+| VietnamNet | `vietnamnet_jsonld` | RSS của VietnamNet bị đứng; đọc JSON-LD `ItemList` trên trang chuyên mục |
+| Kênh YouTube | `youtube_api` | `robots.txt` của YouTube cấm `/feeds/videos.xml`, nên dùng YouTube Data API (cần `YOUTUBE_API_KEY`, 1 đơn vị quota mỗi lần) |
 
-Khi nhiều nguồn cùng đưa tin về một sự kiện (ví dụ TechCrunch, Wired và VnExpress cùng viết về một
-sản phẩm mới ra mắt), pgvector sẽ gom các bài đó vào chung một `ArticleCluster` dựa trên độ tương đồng
-embedding (đa ngôn ngữ, nên khớp được cả tiếng Việt với tiếng Anh). Thay vì hiển thị tất cả, hệ thống
-chỉ giữ lại **một** bài — từ nguồn có độ ưu tiên cao nhất — các bài còn lại bị đánh dấu
-`is_duplicate=True` và bị loại khỏi mọi API/feed.
+- Kiểm tra `robots.txt` trước mỗi request (cache 24 giờ trong Redis).
+- Mỗi tên miền chỉ nhận 1 request mỗi `CRAWL_DOMAIN_INTERVAL_SECONDS`, tính chung cho mọi worker.
+- Gặp đăng nhập, CAPTCHA, 403/429 thì dừng, không tìm cách vượt qua.
+- Mỗi nguồn có lịch riêng (`fetch_interval_minutes` trong `app/constants.py`). Lỗi thì lùi lịch theo
+  hàm mũ; lỗi 5 lần liên tiếp thì tạm dừng nguồn `SOURCE_PAUSE_HOURS` giờ.
+- Email và số điện thoại bị che (`[email]`, `[sđt]`) trước khi lưu và trước khi gửi sang AI.
 
-Thứ tự ưu tiên (`SOURCE_PRIORITY` trong `app/constants.py`, số nhỏ hơn = ưu tiên hơn):
+### AI và hạn mức Groq
+
+Hai bước đều dùng `openai/gpt-oss-20b` với JSON Schema `strict` và `reasoning_effort=low`. Mỗi kết quả
+được lưu vào `enrichments`, gắn với một `pipeline_versions` ghi rõ prompt, schema, provider và model đã
+tạo ra nó. Có thể chọn model tóm tắt riêng cho từng chuyên mục bằng `SUMMARIZE_MODEL_BY_TOPIC`.
+
+Worker tự giữ hạn mức trước khi gọi Groq (token bucket theo phút + trần theo ngày, trong Redis). Khi hết
+hạn mức, job được **hẹn lại chứ không bị tính là lỗi**, và luồng của queue đó tạm nghỉ. Không bài nào bị bỏ
+vì hết hạn mức; bài mới nhất được xử lý trước.
+
+Đo thực tế: phân loại ≈ 1.750 token/bài, tóm tắt ≈ 1.280 token/bài, tức ≈ 3.000 token/bài. Với trần
+`GROQ_DAILY_TOKEN_CAP=160000` của gói miễn phí, một model xử lý đầy đủ được **khoảng 50 bài/ngày**.
+Nếu lượng tin vào nhiều hơn, tồn đọng sẽ tăng: chuyển Groq trả phí, hoặc tách bước tóm tắt sang model
+khác (mỗi model có hạn mức riêng), hoặc đặt `AI_MIN_RELEVANCE` để bỏ tóm tắt tin ít quan trọng.
+
+`LLM_PROVIDER=ollama` vẫn được giữ làm hướng mở rộng (chạy model tại chỗ qua `./start-ollama.sh`),
+cùng interface provider trong `app/ai/providers.py`.
+
+### Lọc trùng lặp
+
+1. **Trùng chính xác:** SHA-256 của văn bản đã chuẩn hóa.
+2. **Gần trùng:** SimHash 64 bit, khoảng cách Hamming ≤ `SIMHASH_MAX_DISTANCE` trong 48 giờ.
+3. **Cùng sự kiện:** embedding đa ngôn ngữ (khớp được tiếng Việt với tiếng Anh) + pgvector, gom vào
+   `item_clusters`. Mỗi cụm chỉ hiện **một** bài: trong các bài đã xử lý xong, bài từ nguồn có
+   `priority` nhỏ nhất (TechCrunch 1 → Wired → Engadget → VnExpress → GenK → VietnamNet → YouTube).
+   Bài cùng sự kiện từ nguồn kém ưu tiên hơn không tốn token AI.
+
+Embedding cần khoảng 0,5–1 GB RAM. Trên VPS nhỏ đặt `EMBEDDINGS_ENABLED=false`; bước 1 và 2 vẫn chạy.
+
+### Điểm Tin Nổi Bật
 
 ```text
-1. TechCrunch   3. Engadget    5. GenK
-2. Wired        4. VnExpress   6. VietnamNet
+S = 100 × (0.30·R + 0.40·e^(−λΔt) + 0.10·T + 0.20·log(1+C)/log(1+5)),   λ = ln2 / 12h
 ```
 
-Bài "thắng" trong cụm vẫn hiển thị badge "N nguồn cùng đưa tin" (dựa trên `cluster.source_count`,
-đếm mọi nguồn kể cả các bản bị ẩn) — đây cũng là một tín hiệu đầu vào của thuật toán Tin Nổi Bật.
-Muốn đổi thứ tự ưu tiên, sửa `SOURCE_PRIORITY` rồi chạy lại
-`python scripts/migrate_dedup_and_sources.py` để backfill lại các cụm đã có.
+R là độ liên quan do AI chấm, Δt là số giờ từ khi đăng, T là độ tin cậy nguồn (`sources.trust`), C là số
+nguồn cùng đưa tin. Job `maint.hotness` tính lại mỗi 5 phút. Bài cũ hơn `ARTICLE_RETENTION_DAYS` (14)
+ngày bị xóa; dữ liệu thô sau `RAW_RETENTION_DAYS` (7) ngày.
 
-Muốn bỏ hẳn một nguồn (xoá nguồn + toàn bộ bài đã cào từ nguồn đó)? Xoá entry khỏi `SOURCES` trong
-`app/constants.py` rồi chạy `python scripts/remove_source.py <slug>`.
+### PWA và Web Push
 
-## Yêu cầu hệ thống
+- `app/manifest.ts` + `public/sw.js`: cài được lên màn hình chính; trang và API được cache theo kiểu
+  network-first nên vẫn đọc được tin đã xem khi mất mạng. `/api/push/*` không bao giờ bị cache.
+- Nút chuông trên header: bật thông báo, chọn chuyên mục, gửi thử, tắt. Chỉ tin có độ liên quan ≥
+  `PUSH_MIN_RELEVANCE`, đăng trong `PUSH_MAX_ITEM_AGE_HOURS` giờ, tối đa `PUSH_MAX_PER_HOUR` tin/giờ.
+- Bảng `deliveries` được ghi trước khi gửi và là duy nhất theo (subscription, item, kênh), nên chạy lại
+  job không gửi trùng. Subscription trả về 404/410 bị xóa tự động.
+- iOS không có lời nhắc cài tự động và chỉ nhận push sau khi cài vào Màn hình chính (iOS 16.4+): app
+  hiện màn hướng dẫn cài.
+- Ở `npm run dev`, service worker chạy chế độ chỉ-push (không cache), nên thử thông báo được ngay.
 
-- Python 3.11+ (máy này có 3.12.3 ✓)
-- Node.js 18.17+ (máy này có 18.19.1 ✓)
-- PostgreSQL 14+ với extension `pgvector`
-- Redis 6+
-- Không cần API key nào — AI chạy tại chỗ qua Ollama (xem bước cài đặt bên dưới). Cần khoảng 5GB
-  dung lượng trống cho model.
+## Cài đặt
 
-## Cài đặt nhanh (1 lệnh)
-
-Sau khi có PostgreSQL + Redis đang chạy (bước 1 bên dưới), lệnh này cài hết phần còn lại — venv +
-thư viện Python, thư viện Node, và Ollama (tải binary + model AI):
-
-```bash
-./setup.sh
-```
-
-An toàn để chạy lại nhiều lần (bỏ qua mọi bước đã làm rồi). Sau đó vẫn cần `python scripts/init_db.py`
-(lần đầu, xem bước 3) rồi mới `./start-dev.sh` được. Các mục 1-4 bên dưới là chi tiết từng phần việc
-`setup.sh` làm giúp, để tham khảo hoặc chạy tay riêng lẻ khi cần.
-
-## 1. Cài đặt PostgreSQL + pgvector và Redis (Ubuntu/Debian)
+### 1. PostgreSQL + pgvector và Redis (Ubuntu/Debian)
 
 ```bash
 sudo apt update
 sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector redis-server
+sudo systemctl enable --now postgresql redis-server
 
-sudo systemctl enable --now postgresql
-sudo systemctl enable --now redis-server
-```
-
-Tạo user + database:
-
-```bash
 sudo -u postgres psql -c "CREATE USER web_news WITH PASSWORD 'web_news';"
 sudo -u postgres psql -c "CREATE DATABASE web_news OWNER web_news;"
 sudo -u postgres psql -d web_news -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-> Ghi chú: script `backend/scripts/init_db.py` cũng tự chạy `CREATE EXTENSION IF NOT EXISTS vector`,
-> nhưng chạy sẵn bằng user `postgres` ở trên để chắc chắn có quyền, phòng khi extension chưa được
-> đánh dấu "trusted" trên máy bạn.
-
-Kiểm tra Redis đang chạy: `redis-cli ping` → phải trả về `PONG`.
-
-## 2. Cài đặt AI tại chỗ (Ollama)
-
-Không cần API key, không giới hạn tốc độ, dữ liệu không rời khỏi máy.
-
-```bash
-./setup-ollama.sh   # chạy 1 lần: tự tải Ollama (bản portable, không cần root) + tải model
-```
-
-Script này tải model `qwen2.5:14b-instruct` (mặc định trong `backend/.env.example`, ~9GB) — chọn
-lớn hơn 7b/3b vì chất lượng tiếng Việt và khả năng phân loại/tóm tắt tốt hơn rõ rệt, hỗ trợ JSON mode
-ổn định. An toàn chạy lại (bỏ qua nếu đã cài/đã tải rồi).
-
-**Đánh đổi cần biết**: chạy CPU-only (không có GPU rời), một bài viết mất khoảng **vài phút** để
-phân tích đầy đủ với model 14b (chậm hơn đáng kể so với 7b, đổi lại chất lượng tốt hơn). `start-dev.sh`
-mặc định chỉ chạy 2 worker Celery song song (khớp với `OLLAMA_NUM_PARALLEL=2` trong `start-ollama.sh`)
-— đã thử tăng lên 4 trên máy 8 nhân và đo được là **chậm hơn**: các request tranh nhau cùng vài lõi
-CPU khiến mỗi bài chậm đi đáng kể, một số bài còn timeout rồi phải retry. Nếu có GPU tốt, tăng lại
-bằng biến `CELERY_CONCURRENCY=8 OLLAMA_NUM_PARALLEL=8 ./start-dev.sh` (chỉnh cả hai cùng lúc) và đo
-lại thực tế thay vì tăng mù. Muốn nhanh hơn (đánh đổi chất lượng), đổi `OLLAMA_MODEL` trong
-`backend/.env` sang `qwen2.5:7b-instruct` hoặc `qwen2.5:3b-instruct` rồi `ollama pull <model>`.
-
-Việc tự fine-tune model riêng (dùng dữ liệu bài viết đã có để huấn luyện tiếp) chưa được làm ở đây —
-để ngỏ cho sau này khi có phần cứng GPU và bộ dữ liệu phù hợp.
-
-## 3. Cài đặt Backend
-
-`./setup.sh` (hoặc `./setup-ollama.sh` một mình) đã lo phần venv + pip install + copy `.env` — làm
-tay nếu muốn:
+### 2. Backend
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-cp .env.example .env
-# Sửa DATABASE_URL / REDIS_URL / OLLAMA_MODEL nếu bạn đổi khác mặc định
-
-python scripts/init_db.py   # tạo bảng + seed nguồn tin (báo + YouTube) + danh mục — chạy 1 lần
+cp .env.example .env              # điền GROQ_API_KEY, YOUTUBE_API_KEY
+python scripts/generate_vapid_keys.py   # khóa Web Push, rồi sửa VAPID_SUBJECT
+python scripts/init_db.py         # Alembic migrations + đồng bộ nguồn/chuyên mục
+python scripts/check_llm.py       # thử 2 bước AI với 1 bài mẫu
 ```
 
-> Đã cài đặt từ trước khi có dedup / nhiều nguồn? Chạy thêm
-> `python scripts/migrate_dedup_and_sources.py` — script này thêm các cột còn thiếu, seed nguồn
-> mới, và backfill lại các cụm bài trùng đã có sẵn. An toàn để chạy lại nhiều lần.
+`./setup.sh` làm sẵn venv, `pip install`, `npm install` và tạo các file `.env`.
 
-Kiểm tra nhanh (không cần Celery/Redis, nhưng cần Ollama đã chạy) — cào + xử lý AI ngay 1 lần, đồng bộ:
-
-```bash
-python scripts/run_scrape_once.py
-```
-
-## 4. Cài đặt Frontend
-
-`./setup.sh` đã lo phần này rồi — làm tay nếu muốn:
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -191,127 +141,71 @@ npm install
 cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-## 5. Chạy toàn bộ hệ thống
-
-Cách nhanh nhất — script tự khởi động Ollama rồi chạy cả 4 tiến trình (FastAPI, Celery worker,
-Celery beat, Next.js dev) cùng lúc, Ctrl+C để dừng tất cả:
+## Chạy
 
 ```bash
 ./start-dev.sh
 ```
 
-Hoặc chạy tay từng service trong các terminal riêng (hữu ích khi cần xem log riêng từng phần):
+Script dọn tiến trình cũ, chạy migration, rồi khởi động FastAPI (:8000), worker và Next.js dev (:3000).
+Ctrl+C dừng tất cả. Chạy tay từng phần:
 
 ```bash
-# Terminal 0 — Ollama (chạy 1 lần, để nền)
-./start-ollama.sh
-
-# Terminal 1 — API
 cd backend && source venv/bin/activate
 uvicorn app.main:app --reload --port 8000
-
-# Terminal 2 — Celery worker (xử lý AI pipeline cho từng bài)
-cd backend && source venv/bin/activate
-celery -A app.worker.celery_app worker --loglevel=info --concurrency=2
-
-# Terminal 3 — Celery beat (lên lịch cào tin mỗi 10 phút)
-cd backend && source venv/bin/activate
-celery -A app.worker.celery_app beat --loglevel=info
-
-# Terminal 4 — Frontend
+python -m app.worker                                   # mọi queue + scheduler
+WORKER_QUEUES=ai_fast:1,ai_deep:1 python -m app.worker  # thêm 1 worker chỉ chạy AI
 cd frontend && npm run dev
 ```
 
-Mở http://localhost:3000. Trang sẽ trống cho tới khi Celery chạy xong lượt cào đầu tiên (hoặc bạn
-đã chạy `run_scrape_once.py` ở bước 3) — feed sẽ tự làm mới nhờ ISR (`revalidate` 120s), và trang
-cũng tự hiện nút "N bài viết mới" khi có bài mới được xử lý xong.
+Chạy nhiều worker cùng lúc là an toàn: chỉ một tiến trình giữ advisory lock và lên lịch.
 
-Production build của frontend: `npm run build && npm run start`.
+## Vận hành
+
+```bash
+python scripts/pool.py status              # job theo queue, item theo trạng thái, nguồn, token Groq hôm nay
+python scripts/pool.py fetch-now [slug]    # cho mọi nguồn (hoặc 1 nguồn) cào ngay, bỏ tạm dừng
+python scripts/pool.py requeue-dead        # đưa job `dead` về hàng đợi
+python scripts/pool.py rerun summarize     # chạy lại bước tóm tắt cho mọi bài (sau khi đổi prompt/model)
+python scripts/remove_source.py <slug>     # xóa hẳn 1 nguồn và mọi bài của nó
+alembic revision -m "..."                  # migration mới; `alembic check` báo nếu models.py lệch DB
+```
 
 ## Cấu trúc thư mục
 
 ```text
 backend/
   app/
-    main.py                FastAPI app (CORS, router, tạo bảng + seed lúc khởi động)
-    config.py               Đọc biến môi trường (.env)
-    models.py                SQLAlchemy models (Article, Source, Category, ArticleCluster)
-    schemas.py                Pydantic response schemas
-    constants.py               6 nguồn tin + SOURCE_PRIORITY (dedup) + 10 danh mục cố định
-    routers/                    /api/articles (?sort=feed|latest|hot), /api/articles/new-count,
-                                  /api/articles/hot, /api/categories, /api/sources
-    scraper/
-      rss_fetcher.py             feedparser + chuẩn hoá ngày giờ + trích thumbnail
-      content_extractor.py        trafilatura + og:image fallback — văn bản sạch + ảnh từ trang gốc
-      vietnamnet_scraper.py        Đọc JSON-LD trên trang cong-nghe (RSS của VietnamNet bị đứng)
-    services/
-      llm.py                       Gọi Ollama, ép JSON schema, validate output
-      embeddings.py                  sentence-transformers (multilingual, free, local)
-      clustering.py                   pgvector cosine distance → gom cụm + chọn bài không trùng
-      hotness.py                       Công thức tính điểm hot
-    worker/
-      celery_app.py                     Celery app + lịch beat (cào/tính hot/dọn tin cũ)
-      tasks.py                            scrape_all_sources / process_article / recompute_hotness_scores /
-                                            cleanup_old_articles
-  scripts/
-    init_db.py                            Tạo extension + bảng + seed (chạy 1 lần, cài đặt lần đầu)
-    migrate_dedup_and_sources.py           Migration: thêm cột dedup, seed nguồn mới, backfill cụm cũ
-    remove_source.py                       Xoá hẳn 1 nguồn + toàn bộ bài của nguồn đó
-    run_scrape_once.py                     Cào + xử lý AI đồng bộ, không cần Celery/Redis — để test
-    reclassify_categories.py               Phân loại lại category cho bài đã có (gọi AI rẻ hơn)
-    reprocess_pending.py                   Xử lý lại các bài lỡ bị lỗi AI
-
+    main.py, routers/        FastAPI: /api/articles, /api/categories, /api/sources, /api/push/*
+    models.py                Schema (Alembic quản lý): sources, fetch_runs, topics, items, item_clusters,
+                             pipeline_versions, enrichments, jobs, push_subscriptions, deliveries
+    constants.py             Danh sách nguồn (connector, priority, trust, lịch) + chuyên mục
+    jobs/                    Pool việc: queue.py (enqueue/claim/lease), runner.py, scheduler.py
+    pipeline/                Handler từng job: fetch, parse_filter, ai, deliver, maintenance
+    connectors/              rss, vietnamnet_jsonld, youtube_api, article_page, http (robots, giãn cách)
+    ai/                      providers (Groq, Ollama), prompts + JSON Schema, budget (token), stages
+    services/                clustering, hotness, embeddings, raw_store, webpush
+    utils/text.py            Chuẩn hóa URL, che dữ liệu cá nhân, SHA-256, SimHash, ngôn ngữ
+    worker/__main__.py       python -m app.worker
+  migrations/                Alembic
+  scripts/                   init_db, check_llm, pool, generate_vapid_keys, remove_source
 frontend/
-  app/
-    layout.tsx                  Layout 3 cột: Chuyên mục (trái) — feed (giữa) — Nguồn tin (phải)
-    page.tsx                    Trang chủ: feed 1 cột (5 bài hot 48h + mới nhất), cuộn vô hạn
-    category/[slug]/page.tsx      Feed lọc theo chuyên mục
-    source/[slug]/page.tsx          Feed lọc theo nguồn tin
-  components/
-    feed.tsx                       Feed: cuộn vô hạn + banner "N bài viết mới" kiểu Facebook
-    feed-post.tsx                    1 bài trong feed: avatar nguồn, tóm tắt AI, ảnh, nút "Đọc bài gốc"
-    category-nav.tsx, source-nav.tsx  Panel dọc (desktop) / hàng ngang (mobile) lọc chuyên mục/nguồn
-    reveal.tsx, aurora-background.tsx   Hiệu ứng scroll-reveal + nền gradient động
-  lib/
-    api.ts                       Gọi FastAPI, có fallback an toàn nếu backend chưa chạy
-    category-meta.ts               Icon + màu riêng cho từng chuyên mục
-
-setup.sh           Cài 1 lần: venv + pip, npm install, .env files, gọi setup-ollama.sh — chạy trước start-dev.sh lần đầu
-setup-ollama.sh    Cài 1 lần: tải Ollama (portable) + pull model — không khởi động server
-start-ollama.sh    Khởi động Ollama server + giám sát trực tiếp ([LOG]/[SYS]/...); Ctrl+C dừng cả server
-start-dev.sh       Khởi động backend + celery + frontend (không đụng Ollama, chỉ kiểm tra nó đã chạy), tự dọn tiến trình cũ trước khi chạy
+  app/                       layout, feed, category/source pages, manifest.ts, offline
+  components/                feed, header (chuyên mục dính trên đầu), push-notifications,
+                             ios-install-guide, pwa (đăng ký SW, nút cài app)
+  lib/                       api.ts, push.ts
+  public/sw.js               Service worker: cache offline + Web Push
 ```
-
-## Thuật toán Tin Nổi Bật
-
-```text
-hotness = 100 × (0.45 × freshness + 0.30 × cross_source_reach + 0.25 × ai_hotness_score)
-```
-
-- `freshness`: suy giảm theo hàm mũ, half-life 12 giờ kể từ `published_at`.
-- `cross_source_reach`: tỉ lệ số nguồn (trên tổng số nguồn đang theo dõi) cùng đưa tin về một chủ
-  đề — xác định bằng cách gom cụm các bài có embedding gần nhau (cosine distance < 0.25) trong
-  vòng 48 giờ, dùng pgvector.
-- `ai_hotness_score`: điểm 0-100 do LLM tự đánh giá mức độ đáng chú ý của tin.
-
-Celery beat tính lại `hotness_score` mỗi 5 phút cho các bài trong 72 giờ gần nhất (vì `freshness`
-giảm dần theo thời gian dù nội dung khác không đổi). Bài cũ hơn 3 ngày (`ARTICLE_RETENTION_DAYS`) bị
-xoá hẳn khỏi database mỗi giờ bởi task `cleanup_old_articles`.
 
 ## Troubleshooting
 
-- **`psycopg2` lỗi kết nối**: kiểm tra `DATABASE_URL` trong `backend/.env`, và Postgres đang chạy
-  (`sudo systemctl status postgresql`).
-- **Celery không kết nối được Redis**: `redis-cli ping` phải trả `PONG`; kiểm tra `REDIS_URL`.
-- **Bài không xử lý được / worker báo lỗi kết nối tới Ollama**: kiểm tra `./start-ollama.sh` đã chạy
-  chưa (`curl http://localhost:11434/api/version` phải trả về JSON).
-- **Xử lý chậm**: bình thường trên máy không có GPU rời — mỗi bài mất khoảng 30-60 giây với model
-  mặc định. Muốn nhanh hơn: đổi sang model nhỏ hơn (`OLLAMA_MODEL=qwen2.5:3b-instruct` trong
-  `backend/.env`, rồi `ollama pull qwen2.5:3b-instruct`).
-- **Trang chủ trống**: bình thường nếu Celery beat/worker chưa chạy lượt đầu — chạy
-  `python scripts/run_scrape_once.py` để có dữ liệu ngay, hoặc đợi tối đa 10 phút nếu đã bật
-  `start-dev.sh`.
-- **GenK trả 503**: do trang chặn request thiếu User-Agent — đã xử lý sẵn trong
-  `scraper/rss_fetcher.py`, không cần sửa gì thêm.
-- Model embedding (`sentence-transformers`) tự tải (~470MB) từ Hugging Face lần đầu chạy — cần
-  mạng, chỉ tải 1 lần rồi cache lại.
+- **Trang chủ trống:** worker chưa xử lý xong bài nào. Xem `python scripts/pool.py status`.
+- **Bài xử lý chậm, nhiều job `rescheduled`:** đang chạm hạn mức Groq (xem mục "AI và hạn mức Groq").
+- **Nguồn YouTube báo lỗi:** chưa có `YOUTUBE_API_KEY` trong `backend/.env`. Thêm key rồi chạy
+  `python scripts/pool.py fetch-now`.
+- **Một nguồn bị `paused`:** lỗi 5 lần liên tiếp (xem `last error` trong `pool.py status`). Sửa xong
+  thì `pool.py fetch-now <slug>`.
+- **Engadget trả HTTP 202 rỗng:** trang chặn bot, được tính là lỗi và nguồn sẽ tự tạm dừng.
+- **Thông báo không đến:** cần HTTPS khi deploy (localhost là ngoại lệ), `VAPID_*` đã điền, và trên iOS
+  phải mở app từ Màn hình chính.
+- Model embedding (~470 MB) tự tải từ Hugging Face lần đầu chạy.

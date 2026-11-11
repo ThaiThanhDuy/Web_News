@@ -1,4 +1,12 @@
-"""Static configuration: news sources and the fixed category taxonomy used by the AI classifier."""
+"""Static configuration: news sources and the fixed public topics used by the AI classifier.
+
+Per source:
+  connector               which app/connectors implementation reads feed_url
+  item_type               news (article page is fetched) | video (feed description only)
+  priority                lower = more authoritative; wins when sources cover the same story
+  trust                   source trust T (0..1) in the ranking formula
+  fetch_interval_minutes  how often the scheduler enqueues a fetch for it
+"""
 
 SOURCES = [
     {
@@ -6,14 +14,24 @@ SOURCES = [
         "name": "VnExpress",
         "homepage_url": "https://vnexpress.net/khoa-hoc-cong-nghe",
         "logo_url": "https://s.vnecdn.net/vnexpress/i/v20/logos/vne_logo_rss.png",
-        "rss_url": "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss",
+        "feed_url": "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss",
+        "connector": "rss",
+        "item_type": "news",
+        "priority": 4,
+        "trust": 0.85,
+        "fetch_interval_minutes": 30,
     },
     {
         "slug": "genk",
         "name": "GenK",
         "homepage_url": "https://genk.vn",
         "logo_url": "https://www.google.com/s2/favicons?sz=64&domain=genk.vn",
-        "rss_url": "https://genk.vn/rss/home.rss",
+        "feed_url": "https://genk.vn/rss/home.rss",
+        "connector": "rss",
+        "item_type": "news",
+        "priority": 5,
+        "trust": 0.7,
+        "fetch_interval_minutes": 30,
     },
     {
         "slug": "vietnamnet",
@@ -25,28 +43,48 @@ SOURCES = [
         # it's the category page itself. scraper/vietnamnet_scraper.py reads
         # the page's schema.org JSON-LD "latest articles" block instead,
         # which VietnamNet does keep genuinely up to date.
-        "rss_url": "https://vietnamnet.vn/cong-nghe",
+        "feed_url": "https://vietnamnet.vn/cong-nghe",
+        "connector": "vietnamnet_jsonld",
+        "item_type": "news",
+        "priority": 6,
+        "trust": 0.75,
+        "fetch_interval_minutes": 30,
     },
     {
         "slug": "techcrunch",
         "name": "TechCrunch",
         "homepage_url": "https://techcrunch.com",
         "logo_url": "https://www.google.com/s2/favicons?sz=64&domain=techcrunch.com",
-        "rss_url": "https://techcrunch.com/feed/",
+        "feed_url": "https://techcrunch.com/feed/",
+        "connector": "rss",
+        "item_type": "news",
+        "priority": 1,
+        "trust": 0.9,
+        "fetch_interval_minutes": 30,
     },
     {
         "slug": "wired",
         "name": "Wired",
         "homepage_url": "https://www.wired.com",
         "logo_url": "https://www.google.com/s2/favicons?sz=64&domain=wired.com",
-        "rss_url": "https://www.wired.com/feed/rss",
+        "feed_url": "https://www.wired.com/feed/rss",
+        "connector": "rss",
+        "item_type": "news",
+        "priority": 2,
+        "trust": 0.9,
+        "fetch_interval_minutes": 60,
     },
     {
         "slug": "engadget",
         "name": "Engadget",
         "homepage_url": "https://www.engadget.com",
         "logo_url": "https://www.google.com/s2/favicons?sz=64&domain=engadget.com",
-        "rss_url": "https://www.engadget.com/rss.xml",
+        "feed_url": "https://www.engadget.com/rss.xml",
+        "connector": "rss",
+        "item_type": "news",
+        "priority": 3,
+        "trust": 0.85,
+        "fetch_interval_minutes": 30,
     },
     {
         "slug": "yt-vatvostudio",
@@ -58,62 +96,61 @@ SOURCES = [
         # sometimes a tiny 307-byte placeholder icon depending on request
         # context, which showed up as broken/fallback avatars in the UI.
         "logo_url": "/avatars/yt-vatvostudio.jpg",
-        "rss_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCEeXA5Tu7n9X5_zkOgGsyww",
+        "feed_url": "https://www.youtube.com/channel/UCEeXA5Tu7n9X5_zkOgGsyww",
+        "connector": "youtube_api",
+        "item_type": "video",
+        "priority": 7,
+        "trust": 0.6,
+        "fetch_interval_minutes": 120,
     },
     {
         "slug": "yt-duyluandethuong",
         "name": "Duy Luân Dễ Thương",
         "homepage_url": "https://www.youtube.com/@duyluandethuong",
         "logo_url": "/avatars/yt-duyluandethuong.jpg",
-        "rss_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQ0jSGgYMLmRMeTE6UaPPXg",
+        "feed_url": "https://www.youtube.com/channel/UCQ0jSGgYMLmRMeTE6UaPPXg",
+        "connector": "youtube_api",
+        "item_type": "video",
+        "priority": 8,
+        "trust": 0.6,
+        "fetch_interval_minutes": 120,
     },
     {
         "slug": "yt-taixaitech",
         "name": "Tài Xài Tech",
         "homepage_url": "https://www.youtube.com/@taixaitech",
         "logo_url": "/avatars/yt-taixaitech.jpg",
-        "rss_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiYYo7oPjA_MQ9i7-zoNfGA",
+        "feed_url": "https://www.youtube.com/channel/UCiYYo7oPjA_MQ9i7-zoNfGA",
+        "connector": "youtube_api",
+        "item_type": "video",
+        "priority": 9,
+        "trust": 0.6,
+        "fetch_interval_minutes": 120,
     },
     {
         "slug": "yt-thinkview",
         "name": "ThinkView",
         "homepage_url": "https://www.youtube.com/@thinkview",
         "logo_url": "/avatars/yt-thinkview.jpg",
-        "rss_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCMRCjWYwR5p2Plp_0ehIG6g",
+        "feed_url": "https://www.youtube.com/channel/UCMRCjWYwR5p2Plp_0ehIG6g",
+        "connector": "youtube_api",
+        "item_type": "video",
+        "priority": 10,
+        "trust": 0.6,
+        "fetch_interval_minutes": 120,
     },
 ]
 
-# Sources whose RSS entries are YouTube videos rather than articles: no page
-# to scrape with trafilatura (YouTube's watch page is a JS app, not
-# server-rendered text), so process_article uses the RSS description as
-# content instead — see app/worker/tasks.py.
-VIDEO_SOURCE_SLUGS = {"yt-vatvostudio", "yt-duyluandethuong", "yt-taixaitech", "yt-thinkview"}
 
-# Used to pick a "winner" when the same story is covered by multiple sources
-# (see app/services/clustering.py): the article from the source with the
-# lowest number here is kept visible, the rest are marked as duplicates.
-# Roughly reflects each outlet's global tech-journalism reach/authority.
-SOURCE_PRIORITY = {
-    "techcrunch": 1,
-    "wired": 2,
-    "engadget": 3,
-    "vnexpress": 4,
-    "genk": 5,
-    "vietnamnet": 6,
-    "yt-vatvostudio": 7,
-    "yt-duyluandethuong": 8,
-    "yt-taixaitech": 9,
-    "yt-thinkview": 10,
-}
-
-# Fixed taxonomy the LLM must classify every article into (kept in sync with the
-# `category` enum described in the AI prompt in app/services/llm.py).
-CATEGORIES = [
+# Fixed public topics (Hướng 1) the classifier picks from — listed in display
+# order, "khac" (the catch-all) last. Kept in sync with the topic enum in the
+# classify JSON Schema (app/ai/prompts.py builds it from this list).
+TOPICS = [
     {"slug": "ai", "name": "Trí tuệ nhân tạo"},
-    {"slug": "di-dong", "name": "Di động"},
     {"slug": "may-tinh", "name": "Máy tính"},
     {"slug": "phan-cung", "name": "Phần cứng"},
     {"slug": "phan-mem", "name": "Phần mềm"},
+    {"slug": "di-dong", "name": "Di động"},
     {"slug": "game", "name": "Game"},
     {"slug": "startup", "name": "Startup"},
     {"slug": "mang-xa-hoi", "name": "Mạng xã hội"},
@@ -122,7 +159,3 @@ CATEGORIES = [
     {"slug": "khac", "name": "Khác"},
 ]
 
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-)

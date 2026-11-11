@@ -11,6 +11,20 @@ const nextConfig = {
     // arbitrary user input.
     remotePatterns: [{ protocol: "https", hostname: "**" }],
   },
+  async headers() {
+    return [
+      {
+        // The service worker must never be served stale from the HTTP cache,
+        // otherwise users would be stuck on an old SW after a deploy.
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+          { key: "Service-Worker-Allowed", value: "/" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

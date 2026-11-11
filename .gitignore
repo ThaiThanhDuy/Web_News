@@ -13,3 +13,6 @@ frontend/next-env.d.ts
 
 # OS
 .DS_Store
+
+# Raw fetched documents (job pipeline, kept RAW_RETENTION_DAYS)
+backend/data/

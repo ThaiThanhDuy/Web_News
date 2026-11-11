@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutGrid, type LucideIcon } from "lucide-react";
@@ -41,9 +42,29 @@ export function CategoryNav({
 }) {
   const pathname = usePathname();
   const visible = sortedVisibleCategories(categories);
+  const navRef = useRef<HTMLElement>(null);
+
+  // On narrow screens the horizontal bar scrolls sideways — keep the active
+  // pill in view (e.g. after opening "Khoa học" from a link).
+  useEffect(() => {
+    if (layout !== "horizontal") return;
+    const nav = navRef.current;
+    const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !active) return;
+    // Set scrollLeft directly (not scrollIntoView): it never scrolls the page
+    // vertically, and isn't animated/deferred by the nav's scroll-smooth.
+    const navBox = nav.getBoundingClientRect();
+    const pillBox = active.getBoundingClientRect();
+    const delta = pillBox.left + pillBox.width / 2 - (navBox.left + navBox.width / 2);
+    nav.style.scrollBehavior = "auto";
+    nav.scrollLeft += delta;
+    nav.style.scrollBehavior = "";
+  }, [pathname, layout]);
 
   return (
     <nav
+      ref={navRef}
+      aria-label="Chuyên mục"
       className={cn(
         layout === "vertical"
           ? "flex flex-col gap-1"
@@ -94,9 +115,12 @@ function CategoryItem({
   return (
     <Link
       href={href}
+      aria-current={active ? "page" : undefined}
       className={cn(
         "flex items-center gap-2 text-sm font-medium transition-all duration-300",
-        layout === "vertical" ? "w-full rounded-lg px-3 py-2" : "shrink-0 rounded-full border px-3 py-1.5",
+        layout === "vertical"
+          ? "w-full rounded-lg px-3 py-2"
+          : "shrink-0 gap-1.5 rounded-full border px-2.5 py-1 text-[13px]",
         layout === "vertical" &&
           (active
             ? "bg-gradient-to-r from-primary/15 to-secondary/10 text-primary shadow-sm ring-1 ring-primary/20"

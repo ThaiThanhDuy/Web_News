@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Runs the whole stack natively (no Docker): FastAPI, Celery worker, Celery beat, Next.js dev server.
+# Runs the whole stack natively (no Docker): FastAPI, the job-pool worker (python -m app.worker,
+# which also runs the scheduler), and the Next.js dev server.
 #
-# Before starting anything, this kills any leftover instance of these same 4 processes (from a
+# Before starting anything, this kills any leftover instance of these same processes (from a
 # previous run of this script, a manually-started server, or a crashed shell). Running two copies
 # of `next dev` against the same frontend/.next directory — or two uvicorn/celery processes fighting
 # over the same port — is exactly what has caused this project's "site is broken" incidents before,
@@ -10,10 +11,12 @@
 # Prerequisites (see README.md for full setup):
 #   - Postgres (with the pgvector extension) and Redis already running
 #   - backend/venv created and `pip install -r requirements.txt` already run
-#   - backend/.env configured, and `python scripts/init_db.py` already run once
+#   - backend/.env configured (migrations are applied automatically below)
 #   - frontend/.env.local configured and `npm install` already run in frontend/
-#   - Ollama: run ./start-ollama.sh in a separate terminal FIRST and leave it
-#     running there — this script only checks it's up, it doesn't start it
+#   - AI provider (LLM_PROVIDER in backend/.env):
+#       groq   — GROQ_API_KEY set in backend/.env (default)
+#       ollama — run ./start-ollama.sh in a separate terminal FIRST and leave
+#                it running there — this script only checks it's up
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +27,8 @@ stop_previous_instances() {
   echo "Stopping any previous instances of this project's services..."
 
   pkill -f "uvicorn app\.main:app" 2>/dev/null || true
-  pkill -f "celery -A app\.worker\.celery_app" 2>/dev/null || true
+  pkill -f "celery -A app\.worker\.celery_app" 2>/dev/null || true  # pre-job-pool versions
+  pkill -INT -f "python -m app\.worker" 2>/dev/null || true
   pkill -f "next-server" 2>/dev/null || true
   pkill -f "next dev" 2>/dev/null || true
 
@@ -33,6 +37,7 @@ stop_previous_instances() {
   sleep 2
   pkill -9 -f "uvicorn app\.main:app" 2>/dev/null || true
   pkill -9 -f "celery -A app\.worker\.celery_app" 2>/dev/null || true
+  pkill -9 -f "python -m app\.worker" 2>/dev/null || true
   pkill -9 -f "next-server" 2>/dev/null || true
   pkill -9 -f "next dev" 2>/dev/null || true
 
@@ -47,16 +52,27 @@ stop_previous_instances() {
 
 stop_previous_instances
 
-# Ollama is no longer managed by this script — start-ollama.sh owns its
-# whole lifecycle (start, live [LOG]/[SYS]/... monitor, and stop on
-# Ctrl+C), and is meant to be left running in its own terminal. This just
-# checks it's actually up rather than starting it, since starting it here
-# too would fight over who gets to stop it.
-if ! curl -s -o /dev/null http://localhost:11434/api/version; then
-  echo "Ollama chưa chạy. Mở một terminal khác, chạy ./start-ollama.sh, rồi chạy lại script này." >&2
-  exit 1
+env_value() {
+  grep -E "^$1=" "$BACKEND_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs
+}
+LLM_PROVIDER="$(env_value LLM_PROVIDER)"
+LLM_PROVIDER="${LLM_PROVIDER:-groq}"
+
+if [ "$LLM_PROVIDER" = "ollama" ]; then
+  # start-ollama.sh owns Ollama's whole lifecycle (start, live monitor, stop
+  # on Ctrl+C) in its own terminal; this only checks it's actually up.
+  if ! curl -s -o /dev/null http://localhost:11434/api/version; then
+    echo "Ollama chưa chạy. Mở một terminal khác, chạy ./start-ollama.sh, rồi chạy lại script này." >&2
+    exit 1
+  fi
+  echo "AI: Ollama (local) đã sẵn sàng."
+else
+  if [ -z "$(env_value GROQ_API_KEY)" ]; then
+    echo "LLM_PROVIDER=groq nhưng chưa có GROQ_API_KEY trong backend/.env (lấy key tại https://console.groq.com/keys)." >&2
+    exit 1
+  fi
+  echo "AI: Groq API (phân loại: $(env_value CLASSIFY_MODEL), tóm tắt: $(env_value SUMMARIZE_MODEL))."
 fi
-echo "Ollama đã sẵn sàng."
 
 PIDS=()
 cleanup() {
@@ -71,25 +87,15 @@ trap cleanup EXIT INT TERM
 cd "$BACKEND_DIR"
 source venv/bin/activate
 
+echo "Applying database migrations..."
+python scripts/init_db.py
+
 echo "Starting FastAPI on http://localhost:8000 ..."
 uvicorn app.main:app --reload --port 8000 &
 PIDS+=($!)
 
-# On CPU-only inference, each in-flight request already wants several
-# cores for itself — pushing this to 4 was tried and measured worse: each
-# article went from ~1-3min to ~4-5min (some even breaching the 300s
-# timeout and retrying) because 4 requests were fighting over the same 8
-# cores instead of adding real throughput. 2 is the empirically-good value
-# for this machine; matched by OLLAMA_NUM_PARALLEL in start-ollama.sh.
-# Raise both together only if you have a strong GPU behind Ollama.
-CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-2}"
-
-echo "Starting Celery worker (concurrency=$CELERY_CONCURRENCY)..."
-celery -A app.worker.celery_app worker --loglevel=info --concurrency="$CELERY_CONCURRENCY" &
-PIDS+=($!)
-
-echo "Starting Celery beat (scrape every ${SCRAPE_INTERVAL_SECONDS:-180}s)..."
-celery -A app.worker.celery_app beat --loglevel=info &
+echo "Starting job-pool worker + scheduler (queues: ${WORKER_QUEUES:-from backend/.env or defaults})..."
+python -m app.worker &
 PIDS+=($!)
 
 cd "$FRONTEND_DIR"

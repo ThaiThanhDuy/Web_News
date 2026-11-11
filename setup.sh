@@ -63,9 +63,14 @@ fi
 
 echo ""
 echo "======================================================================"
-echo " 3/3 — Ollama (AI local)"
+echo " 3/3 — AI provider"
 echo "======================================================================"
-"$ROOT_DIR/setup-ollama.sh"
+LLM_PROVIDER="$(grep -E '^LLM_PROVIDER=' "$ROOT_DIR/backend/.env" 2>/dev/null | tail -n1 | cut -d= -f2- | xargs)"
+if [ "${LLM_PROVIDER:-groq}" = "ollama" ]; then
+  "$ROOT_DIR/setup-ollama.sh"
+else
+  echo "LLM_PROVIDER=groq — bỏ qua cài Ollama. Nhớ điền GROQ_API_KEY trong backend/.env."
+fi
 
 echo ""
 echo "======================================================================"
@@ -75,4 +80,5 @@ echo "Còn lại trước khi chạy ./start-dev.sh:"
 echo "  - Đảm bảo Postgres (có pgvector) và Redis đang chạy"
 echo "  - Kiểm tra backend/.env và frontend/.env.local đúng với máy bạn"
 echo "  - Chạy 'python scripts/init_db.py' trong backend/ (venv active) nếu là lần đầu"
-echo "  - Chạy ./start-ollama.sh ở terminal riêng, rồi ./start-dev.sh"
+echo "  - Groq: điền GROQ_API_KEY trong backend/.env, rồi ./start-dev.sh"
+echo "    (hoặc LLM_PROVIDER=ollama: chạy ./start-ollama.sh ở terminal riêng trước)"

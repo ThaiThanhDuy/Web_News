@@ -1,20 +1,29 @@
-"""Idempotent seed of the fixed sources & categories rows. Safe to run repeatedly.
+"""Idempotent sync of the fixed sources & topics rows from app/constants.py.
+Safe to run repeatedly (the API runs it on startup).
 
-Existing rows are kept in sync with app/constants.py (not just inserted once),
-so editing e.g. a source's logo_url there and restarting the API is enough —
-no separate migration needed for these two tables.
+Only the static configuration columns are overwritten — runtime crawl
+state (next_run_at, cursor, failure counters, pause) is left untouched.
 """
 
 from sqlalchemy.orm import Session
 
-from app.constants import CATEGORIES, SOURCES
-from app.models import Category, Source
+from app.constants import SOURCES, TOPICS
+from app.models import Source, Topic
 
-_SOURCE_FIELDS = ("name", "homepage_url", "logo_url", "rss_url")
-_CATEGORY_FIELDS = ("name",)
+_SOURCE_FIELDS = (
+    "name",
+    "homepage_url",
+    "logo_url",
+    "feed_url",
+    "connector",
+    "item_type",
+    "priority",
+    "trust",
+    "fetch_interval_minutes",
+)
 
 
-def seed_sources_and_categories(db: Session) -> None:
+def seed_sources_and_topics(db: Session) -> None:
     existing_sources = {s.slug: s for s in db.query(Source).all()}
     for src in SOURCES:
         existing = existing_sources.get(src["slug"])
@@ -24,13 +33,13 @@ def seed_sources_and_categories(db: Session) -> None:
         for field in _SOURCE_FIELDS:
             setattr(existing, field, src[field])
 
-    existing_categories = {c.slug: c for c in db.query(Category).all()}
-    for cat in CATEGORIES:
-        existing = existing_categories.get(cat["slug"])
+    existing_topics = {t.slug: t for t in db.query(Topic).all()}
+    for order, topic in enumerate(TOPICS):
+        existing = existing_topics.get(topic["slug"])
         if existing is None:
-            db.add(Category(**cat))
+            db.add(Topic(slug=topic["slug"], name=topic["name"], is_public=True, sort_order=order))
             continue
-        for field in _CATEGORY_FIELDS:
-            setattr(existing, field, cat[field])
+        existing.name = topic["name"]
+        existing.sort_order = order
 
     db.commit()

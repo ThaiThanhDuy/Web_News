@@ -1,6 +1,5 @@
-"""One-time setup: creates the pgvector extension, all tables, and seeds
-sources/categories. Run this once after creating the Postgres database and
-before starting the API or the Celery worker/beat.
+"""Creates / upgrades the schema (Alembic) and syncs sources + topics.
+Safe to run repeatedly; run it after every pull that adds a migration.
 
 Usage (from backend/, with the venv active):
     python scripts/init_db.py
@@ -9,27 +8,23 @@ Usage (from backend/, with the venv active):
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import text  # noqa: E402
+from alembic import command  # noqa: E402
+from alembic.config import Config  # noqa: E402
 
-import app.models  # noqa: E402,F401  (registers tables on Base.metadata)
-from app.database import Base, SessionLocal, engine  # noqa: E402
-from app.seed import seed_sources_and_categories  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app.seed import seed_sources_and_topics  # noqa: E402
 
 
 def main() -> None:
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    Base.metadata.create_all(bind=engine)
-
-    db = SessionLocal()
-    try:
-        seed_sources_and_categories(db)
-    finally:
-        db.close()
-
-    print("Database initialized: pgvector extension enabled, tables created, sources/categories seeded.")
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    command.upgrade(config, "head")
+    with SessionLocal() as db:
+        seed_sources_and_topics(db)
+    print("Database ready: migrations applied, sources/topics synced.")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,9 @@
-"""Removes a source and all of its articles from the database. If any of
-those articles was the "primary" (non-duplicate) article of a cluster, a new
-primary is re-elected from the cluster's remaining members per
-SOURCE_PRIORITY; clusters left with no members are deleted too.
+"""Removes a source and all of its items (enrichments, deliveries and fetch
+runs cascade). Clusters that lose their visible item get a new one elected
+from the remaining members; clusters left empty are deleted.
 
-Run this after removing a source from app/constants.py's SOURCES list (that
-alone only stops future scraping — it doesn't touch existing rows).
+Run after removing the source from app/constants.py's SOURCES (that alone
+only stops future syncing; the row would stay, and keep being fetched).
 
 Usage (from backend/, with the venv active):
     python scripts/remove_source.py <source-slug>
@@ -17,76 +16,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select  # noqa: E402
 
-from app.constants import SOURCE_PRIORITY  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import Article, ArticleCluster, Source  # noqa: E402
+from app.models import Item, ItemCluster, Source  # noqa: E402
+from app.services.clustering import elect_primary  # noqa: E402
 
 
 def main(slug: str) -> None:
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         source = db.execute(select(Source).where(Source.slug == slug)).scalar_one_or_none()
         if source is None:
-            print(f"No source with slug={slug!r} found — nothing to do.")
+            print(f"No source with slug={slug!r} — nothing to do.")
             return
-
-        articles_to_delete = db.execute(select(Article).where(Article.source_id == source.id)).scalars().all()
-        delete_ids = {a.id for a in articles_to_delete}
-        affected_cluster_ids = {a.cluster_id for a in articles_to_delete if a.cluster_id is not None}
-
-        print(f"Found {len(articles_to_delete)} articles from {slug!r} across {len(affected_cluster_ids)} clusters.")
-
-        promoted = 0
-        emptied_cluster_ids: list[int] = []
-
-        for cluster_id in affected_cluster_ids:
-            cluster = db.get(ArticleCluster, cluster_id)
+        cluster_ids = set(
+            db.execute(select(Item.cluster_id).where(Item.source_id == source.id, Item.cluster_id.is_not(None))).scalars()
+        )
+        item_count = db.execute(select(Item.id).where(Item.source_id == source.id)).all()
+        db.delete(source)
+        db.flush()
+        for cluster_id in cluster_ids:
+            cluster = db.get(ItemCluster, cluster_id)
             if cluster is None:
                 continue
-
-            members = db.execute(select(Article).where(Article.cluster_id == cluster_id)).scalars().all()
-            remaining = [a for a in members if a.id not in delete_ids]
-
-            if not remaining:
-                cluster.primary_article_id = None
-                emptied_cluster_ids.append(cluster_id)
-                continue
-
-            if cluster.primary_article_id in delete_ids:
-                winner = min(remaining, key=lambda a: (SOURCE_PRIORITY.get(a.source.slug, 999), a.published_at))
-                cluster.primary_article_id = winner.id
-                for member in remaining:
-                    member.is_duplicate = member.id != winner.id
-                promoted += 1
-
-            cluster.source_count = len({a.source_id for a in remaining})
-
-        # Persist the cluster.primary_article_id changes *before* deleting the
-        # articles they used to point to, or the FK constraint would reject it.
-        db.flush()
-
-        for article in articles_to_delete:
-            db.delete(article)
-        db.flush()
-
-        for cluster_id in emptied_cluster_ids:
-            cluster = db.get(ArticleCluster, cluster_id)
-            if cluster is not None:
+            if db.execute(select(Item.id).where(Item.cluster_id == cluster_id).limit(1)).first() is None:
                 db.delete(cluster)
-
-        db.delete(source)
+            else:
+                elect_primary(db, cluster)
         db.commit()
-
-        print(
-            f"Done. Re-elected primary for {promoted} clusters, removed {len(emptied_cluster_ids)} "
-            f"now-empty clusters, deleted source {slug!r} and its {len(articles_to_delete)} articles."
-        )
-    finally:
-        db.close()
+    print(f"Removed {slug!r}: {len(item_count)} items, {len(cluster_ids)} clusters re-checked.")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python scripts/remove_source.py <source-slug>")
-        sys.exit(1)
+        sys.exit("Usage: python scripts/remove_source.py <source-slug>")
     main(sys.argv[1])

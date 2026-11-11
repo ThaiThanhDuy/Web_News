@@ -1,42 +1,45 @@
-"""Composite "hotness" score used to rank the Tin Nổi Bật feed.
+"""News ranking score:
 
-hotness = 100 * (0.45 * freshness + 0.30 * cross_source_reach + 0.25 * ai_hotness)
+    S = w_r·R + w_f·e^(−λ·Δt) + w_t·T + w_c·log(1+C) / log(1+C_max)
 
-- freshness: exponential decay based on time since publish (half-life ~12h)
-- cross_source_reach: how many of the 3 tracked sources are covering the same
-  story (from ArticleCluster.source_count), i.e. topic density across outlets
-- ai_hotness: the LLM's own 0-100 "how newsworthy is this" estimate
+  R   relevance from the classify stage (0-100 → 0..1)
+  Δt  hours since publication, λ = ln(2)/12 (12-hour half-life)
+  T   source trust (sources.trust, 0..1)
+  C   number of distinct sources covering the story (cluster size),
+      normalized so C_max sources = 1
+
+Scaled to 0-100. Weights are starting values to tune on real data.
 """
 
 import math
 from datetime import datetime, timezone
 
-from app.constants import SOURCES
+HALF_LIFE_HOURS = 12.0
+LAMBDA = math.log(2) / HALF_LIFE_HOURS
+C_MAX = 5
 
-TOTAL_SOURCES = len(SOURCES)
-FRESHNESS_HALF_LIFE_HOURS = 12.0
-_DECAY_CONSTANT = FRESHNESS_HALF_LIFE_HOURS / math.log(2)
-
-W_FRESHNESS = 0.45
-W_CROSS_SOURCE = 0.30
-W_AI_SCORE = 0.25
+W_RELEVANCE = 0.30
+W_FRESHNESS = 0.40
+W_TRUST = 0.10
+W_COVERAGE = 0.20
 
 
 def compute_hotness(
+    *,
     published_at: datetime,
+    relevance: float | None,
+    trust: float | None,
     cluster_source_count: int,
-    ai_hotness_score: float | None,
     now: datetime | None = None,
 ) -> float:
     now = now or datetime.now(timezone.utc)
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
+    hours = max(0.0, (now - published_at).total_seconds() / 3600)
 
-    hours_since_publish = max(0.0, (now - published_at).total_seconds() / 3600)
-    freshness = math.exp(-hours_since_publish / _DECAY_CONSTANT)
+    r = (relevance if relevance is not None else 50.0) / 100
+    f = math.exp(-LAMBDA * hours)
+    t = trust if trust is not None else 0.5
+    c = min(1.0, math.log1p(max(1, cluster_source_count)) / math.log1p(C_MAX))
 
-    cross_source = min(cluster_source_count / TOTAL_SOURCES, 1.0)
-    ai_score = (ai_hotness_score if ai_hotness_score is not None else 50.0) / 100
-
-    score = 100 * (W_FRESHNESS * freshness + W_CROSS_SOURCE * cross_source + W_AI_SCORE * ai_score)
-    return round(score, 2)
+    return round(100 * (W_RELEVANCE * r + W_FRESHNESS * f + W_TRUST * t + W_COVERAGE * c), 2)

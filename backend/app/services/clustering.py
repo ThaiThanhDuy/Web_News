@@ -1,82 +1,85 @@
-"""Cross-source duplicate/topic clustering using pgvector cosine distance.
+"""Same-story clustering across sources (pgvector cosine distance), and the
+choice of which item of a cluster readers see.
 
-When a new article is processed we look for the nearest already-clustered
-article from a *different* source published within the last
-CLUSTER_WINDOW_HOURS. If it's close enough (cosine distance below the
-threshold) we consider them the same story and reuse its cluster, otherwise
-we start a new one. `ArticleCluster.source_count` (distinct sources covering
-the story) is used as one of the inputs to the hotness score.
+assign_cluster() runs in the filter stage, right after the embedding is
+computed: the item joins the cluster of its nearest neighbour from a
+*different* source within CLUSTER_WINDOW_HOURS if it's close enough, else
+starts a new cluster.
 
-Within a cluster, only one article is shown to readers — the one from the
-highest-priority source (see SOURCE_PRIORITY) — the rest are flagged
-`is_duplicate` and excluded from every public listing.
+elect_primary() picks the one visible item per cluster: among members that
+finished AI enrichment, the one from the most authoritative source (lowest
+`sources.priority`), earliest first on ties. Electing among *enriched*
+members only means a story never disappears from the feed while a
+better-ranked copy is still being processed.
 """
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.constants import SOURCE_PRIORITY
-from app.models import Article, ArticleCluster
+from app.models import Item, ItemCluster, ItemStatus, Source
 
 
-def _priority(article: Article) -> int:
-    return SOURCE_PRIORITY.get(article.source.slug, 999)
-
-
-def assign_cluster(db: Session, article: Article) -> ArticleCluster:
+def assign_cluster(db: Session, item: Item) -> ItemCluster:
     window_start = datetime.now(timezone.utc) - timedelta(hours=settings.CLUSTER_WINDOW_HOURS)
-
-    stmt = (
-        select(Article, Article.embedding.cosine_distance(article.embedding).label("distance"))
+    distance = Item.embedding.cosine_distance(item.embedding).label("distance")
+    row = db.execute(
+        select(Item.cluster_id, distance)
         .where(
-            Article.id != article.id,
-            Article.source_id != article.source_id,
-            Article.cluster_id.is_not(None),
-            Article.embedding.is_not(None),
-            Article.published_at >= window_start,
+            Item.id != item.id,
+            Item.source_id != item.source_id,
+            Item.cluster_id.is_not(None),
+            Item.embedding.is_not(None),
+            Item.published_at >= window_start,
         )
-        .order_by("distance")
+        .order_by(distance)
         .limit(1)
-    )
-    row = db.execute(stmt).first()
+    ).first()
 
     if row is not None and row.distance is not None and row.distance < settings.CLUSTER_DISTANCE_THRESHOLD:
-        nearest_article: Article = row[0]
-        cluster = nearest_article.cluster
+        cluster = db.get(ItemCluster, row.cluster_id)
     else:
-        cluster = ArticleCluster()
+        cluster = ItemCluster()
         db.add(cluster)
         db.flush()
 
-    article.cluster_id = cluster.id
+    item.cluster_id = cluster.id
     db.flush()
-
-    distinct_sources = db.execute(
-        select(Article.source_id).where(Article.cluster_id == cluster.id).distinct()
-    ).all()
-    cluster.source_count = len(distinct_sources)
-
-    _update_primary(db, cluster, article)
-
+    refresh_source_count(db, cluster)
     return cluster
 
 
-def _update_primary(db: Session, cluster: ArticleCluster, new_article: Article) -> None:
-    """Keeps exactly one non-duplicate article per cluster: the one from the
-    most authoritative source, per SOURCE_PRIORITY."""
-    current_primary = db.get(Article, cluster.primary_article_id) if cluster.primary_article_id else None
+def refresh_source_count(db: Session, cluster: ItemCluster) -> None:
+    cluster.source_count = max(
+        1,
+        db.execute(
+            select(func.count(func.distinct(Item.source_id))).where(Item.cluster_id == cluster.id)
+        ).scalar_one(),
+    )
 
-    if current_primary is None or current_primary.id == new_article.id:
-        new_article.is_duplicate = False
-        cluster.primary_article_id = new_article.id
-        return
 
-    if _priority(new_article) < _priority(current_primary):
-        current_primary.is_duplicate = True
-        new_article.is_duplicate = False
-        cluster.primary_article_id = new_article.id
-    else:
-        new_article.is_duplicate = True
+def best_enriched_member(db: Session, cluster_id: int, exclude_item_id: int | None = None) -> Item | None:
+    stmt = (
+        select(Item)
+        .join(Source, Source.id == Item.source_id)
+        .where(Item.cluster_id == cluster_id, Item.status == ItemStatus.ENRICHED)
+        .order_by(Source.priority, Item.published_at, Item.id)
+        .limit(1)
+    )
+    if exclude_item_id is not None:
+        stmt = stmt.where(Item.id != exclude_item_id)
+    return db.execute(stmt).scalars().first()
+
+
+def elect_primary(db: Session, cluster: ItemCluster) -> Item | None:
+    winner = best_enriched_member(db, cluster.id)
+    cluster.primary_item_id = winner.id if winner else None
+    members = db.execute(
+        select(Item).where(Item.cluster_id == cluster.id, Item.status == ItemStatus.ENRICHED)
+    ).scalars().all()
+    for member in members:
+        member.is_duplicate = winner is not None and member.id != winner.id
+    refresh_source_count(db, cluster)
+    return winner
