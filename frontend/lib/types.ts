@@ -22,12 +22,18 @@ export interface Article {
   published_at: string;
   source: Source;
   category: Category | null;
+  /** Other topics the story also belongs to (it's listed under them too). */
+  related_categories?: Category[];
   summary_bullets: string[] | null;
   one_line_takeaway: string | null;
   keywords: string[] | null;
   sentiment: Sentiment | null;
   hotness_score: number;
   cross_source_count: number;
+  /** One of the hottest stories leading a feed (sort=feed). */
+  is_featured?: boolean;
+  /** Featured partly because it matches the reader's interests. */
+  is_personalized?: boolean;
 }
 
 export interface ArticlePage {

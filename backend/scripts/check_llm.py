@@ -24,9 +24,9 @@ CONTENT = (
 )
 
 
-def run(stage: str, system: str, schema: dict, max_chars: int, max_out: int) -> bool:
+def run(stage: str, system: str, schema: dict, max_chars: int, max_out: int, model: str | None = None) -> bool:
     provider = get_provider()
-    model = provider.model_for(stage)
+    model = model or provider.model_for(stage)
     user = prompts.article_message(TITLE, "Mẫu", CONTENT, max_chars)
     started = time.monotonic()
     try:
@@ -55,7 +55,11 @@ def main() -> None:
     ok = run("classify", prompts.CLASSIFY_SYSTEM, prompts.CLASSIFY_SCHEMA, settings.CLASSIFY_MAX_CONTENT_CHARS, CLASSIFY_MAX_OUTPUT)
     ok = run("summarize", prompts.SUMMARIZE_SYSTEM, prompts.SUMMARIZE_SCHEMA, settings.SUMMARIZE_MAX_CONTENT_CHARS, SUMMARIZE_MAX_OUTPUT) and ok
     if settings.LLM_PROVIDER == "groq":
-        for model in sorted({settings.CLASSIFY_MODEL, settings.SUMMARIZE_MODEL}):
+        for fallback in settings.groq_fallback_models:
+            print(f"--- dự phòng: {fallback}")
+            ok = run("classify", prompts.CLASSIFY_SYSTEM, prompts.CLASSIFY_SCHEMA, settings.CLASSIFY_MAX_CONTENT_CHARS, CLASSIFY_MAX_OUTPUT, fallback) and ok
+            ok = run("summarize", prompts.SUMMARIZE_SYSTEM, prompts.SUMMARIZE_SCHEMA, settings.SUMMARIZE_MAX_CONTENT_CHARS, SUMMARIZE_MAX_OUTPUT, fallback) and ok
+        for model in sorted({settings.CLASSIFY_MODEL, settings.SUMMARIZE_MODEL, *settings.groq_fallback_models}):
             print(f"Token đã dùng hôm nay (UTC) — {model}: {budget.used_today(model)}/{settings.GROQ_DAILY_TOKEN_CAP}")
     sys.exit(0 if ok else 1)
 

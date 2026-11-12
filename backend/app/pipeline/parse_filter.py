@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.jobs.queue import ClaimedJob
-from app.models import Item, ItemStatus
+from app.models import Item, ItemStatus, Topic
 from app.pipeline.steps import enqueue_next
 from app.services.clustering import assign_cluster
 from app.utils.text import content_hash, detect_language, hamming64, simhash64
@@ -105,6 +105,18 @@ def handle_filter_item(db: Session, job: ClaimedJob) -> None:
 
         item.embedding = embed_text(combined)
         assign_cluster(db, item)
+
+    # Single-topic sources (economy desks): the topic is known, so skip the
+    # AI classify call and go straight to summarize.
+    if item.source.default_topic:
+        topic = db.execute(select(Topic).where(Topic.slug == item.source.default_topic)).scalar_one_or_none()
+        if topic is not None:
+            item.primary_topic_id = topic.id
+            item.status = ItemStatus.CLASSIFIED
+            item.status_reason = "topic from source (classify skipped)"
+            db.flush()
+            enqueue_next(db, item)
+            return
 
     item.status = ItemStatus.READY
     enqueue_next(db, item)

@@ -33,6 +33,8 @@ class ArticleOut(BaseModel):
 
     source: SourceOut
     category: CategoryOut | None = None
+    # Other topics the story also belongs to (it's listed under them too).
+    related_categories: list[CategoryOut] = []
 
     summary_bullets: list[str] | None = None
     one_line_takeaway: str | None = None
@@ -41,6 +43,10 @@ class ArticleOut(BaseModel):
 
     hotness_score: float
     cross_source_count: int = 1
+    # True for the "hottest first" items leading a feed page (sort=feed).
+    is_featured: bool = False
+    # Featured partly because it matches the reader's interests (part C).
+    is_personalized: bool = False
 
 
 class ArticlePage(BaseModel):

@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   Smartphone,
   SquareCode,
+  TrendingUp,
 } from "lucide-react";
 
 interface CategoryMeta {
@@ -116,6 +117,17 @@ export const CATEGORY_META: Record<string, CategoryMeta> = {
     gradientFrom: "from-orange-500",
     gradient: "from-orange-500 to-amber-500",
     glow: "shadow-orange-500/40",
+  },
+  "kinh-te": {
+    icon: TrendingUp,
+    dot: "bg-amber-500",
+    text: "text-amber-600 dark:text-amber-400",
+    ring: "ring-amber-500/30",
+    border: "border-amber-500/60",
+    chip: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    gradientFrom: "from-amber-500",
+    gradient: "from-amber-500 to-yellow-500",
+    glow: "shadow-amber-500/40",
   },
   "mang-xa-hoi": {
     icon: Share2,

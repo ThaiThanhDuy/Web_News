@@ -7,7 +7,7 @@ from sqlalchemy import inspect
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.routers import articles, meta, push, search
+from app.routers import articles, dashboard, events, meta, push, search
 from app.seed import seed_sources_and_topics
 
 
@@ -40,6 +40,8 @@ app.include_router(meta.router)
 app.include_router(articles.router)
 app.include_router(push.router)
 app.include_router(search.router)
+app.include_router(dashboard.router)
+app.include_router(events.router)
 
 
 @app.get("/health")

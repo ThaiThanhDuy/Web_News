@@ -6,6 +6,8 @@ import { ArrowUp, Loader2 } from "lucide-react";
 import { FeedPost } from "@/components/feed-post";
 import { Reveal } from "@/components/reveal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { interestParams, usePersonalizationKey } from "@/lib/interests";
+import { DEFAULT_HOT_COUNT, langParam, useHotCount, useLangs } from "@/lib/settings";
 import type { Article } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -38,15 +40,51 @@ export function Feed({
   const itemsRef = useRef(items);
   itemsRef.current = items;
 
+  // Category feeds lead with the reader's chosen number of hottest stories
+  // (Cài đặt → Tin nổi bật mỗi lĩnh vực). Server-rendered items used the
+  // default, so the feed reloads when the setting differs from it.
+  const [hotCountSetting] = useHotCount();
+  const hotCount = category ? hotCountSetting : undefined;
+  // Personalized featured stories (Cài đặt → Cá nhân hoá): the key changes
+  // when personalization is switched on/off or reset, not on every click.
+  const personalKey = usePersonalizationKey();
+  // Cài đặt → Ngôn ngữ tin: one language selected filters every feed.
+  const [langs] = useLangs();
+  const lang = langParam(langs);
+  // Server-rendered items used the defaults: 5 hot, no profile, all languages.
+  const applied = useRef(JSON.stringify([DEFAULT_HOT_COUNT, "{}", ""]));
+
   const buildQuery = useCallback(
     (extra: Record<string, string>) => {
       const query = new URLSearchParams(extra);
       if (category) query.set("category", category);
       if (source) query.set("source", source);
+      if (hotCount !== undefined) query.set("hot_count", String(hotCount));
+      if (lang) query.set("lang", lang);
+      if (personalKey) for (const [k, v] of Object.entries(interestParams())) query.set(k, v);
       return query;
     },
-    [category, source]
+    [category, source, hotCount, personalKey, lang]
   );
+
+  useEffect(() => {
+    const wanted = JSON.stringify([hotCount ?? DEFAULT_HOT_COUNT, personalKey || "{}", lang ?? ""]);
+    if (!personalKey || wanted === applied.current) return;
+    const controller = new AbortController();
+    const query = buildQuery({ sort: "feed", page: "1", page_size: String(pageSize) });
+    fetch(`${API_BASE}/api/articles?${query.toString()}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        applied.current = wanted;
+        setItems(data.items ?? []);
+        setPage(1);
+        setHasMore(Boolean(data.has_more));
+      })
+      .catch(() => {
+        // keep the current list (aborted, or the API is unreachable)
+      });
+    return () => controller.abort();
+  }, [hotCount, personalKey, lang, buildQuery, pageSize]);
 
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || !hasMore) return;
@@ -140,7 +178,7 @@ export function Feed({
       <div className="space-y-4">
         {items.map((article, i) => (
           <Reveal key={article.id} delay={i < pageSize ? Math.min(i * 60, 300) : 0}>
-            <FeedPost article={article} priority={i === 0} />
+            <FeedPost article={article} priority={i === 0} position={i + 1} />
           </Reveal>
         ))}
 

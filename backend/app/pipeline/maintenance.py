@@ -9,11 +9,23 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.jobs.queue import ClaimedJob, reap_expired_leases
-from app.models import Delivery, FetchRun, Item, ItemCluster, ItemStatus, Job, JobStatus, Source
+from app.models import (
+    Delivery,
+    FetchRun,
+    Item,
+    ItemCluster,
+    ItemStatus,
+    Job,
+    JobStatus,
+    KeywordDaily,
+    SearchQueryDaily,
+)
 from app.pipeline.steps import dedupe_key, enqueue_next, next_step
 from app.services import raw_store
 from app.services.clustering import elect_primary
-from app.services.hotness import compute_hotness
+from app.services import local_classifier, youtube_stats
+from app.services.ranking import rescore
+from app.services.trends import refresh_keyword_daily, refresh_trends
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +45,31 @@ def handle_reap(db: Session, job: ClaimedJob) -> None:
 
 
 def handle_hotness(db: Session, job: ClaimedJob) -> None:
+    """Freshness decays and trends/engagement move: re-rank recent items."""
     window_start = _now() - timedelta(hours=settings.HOTNESS_WINDOW_HOURS)
-    rows = db.execute(
-        select(Item, Source.trust, ItemCluster.source_count)
-        .join(Source, Source.id == Item.source_id)
-        .outerjoin(ItemCluster, ItemCluster.id == Item.cluster_id)
-        .where(Item.status == ItemStatus.ENRICHED, Item.is_duplicate.is_(False), Item.published_at >= window_start)
-    ).all()
-    for item, trust, source_count in rows:
-        item.hotness_score = compute_hotness(
-            published_at=item.published_at,
-            relevance=item.relevance,
-            trust=trust,
-            cluster_source_count=source_count or 1,
+    items = db.execute(
+        select(Item).where(
+            Item.status == ItemStatus.ENRICHED, Item.is_duplicate.is_(False), Item.published_at >= window_start
         )
+    ).scalars().all()
+    rescore(db, list(items))
+
+
+def handle_trends(db: Session, job: ClaimedJob) -> None:
+    days = refresh_keyword_daily(db)
+    keywords = refresh_trends(db)
+    logger.info("trends: %s keyword-day rows, %s keywords in the last 24h", days, keywords)
+
+
+def handle_local_classifier_eval(db: Session, job: ClaimedJob) -> None:
+    status = local_classifier.evaluate(db)
+    logger.info("local classifier: %s", status)
+
+
+def handle_youtube_stats(db: Session, job: ClaimedJob) -> None:
+    updated = youtube_stats.refresh(db)
+    if updated:
+        logger.info("youtube stats: refreshed %s videos", updated)
 
 
 def handle_cleanup(db: Session, job: ClaimedJob) -> None:
@@ -82,6 +105,9 @@ def handle_cleanup(db: Session, job: ClaimedJob) -> None:
         )
     ).rowcount
     deliveries = db.execute(delete(Delivery).where(Delivery.created_at < now - timedelta(days=90))).rowcount
+    stats_cutoff = (now - timedelta(days=settings.KEYWORD_STATS_RETENTION_DAYS)).date()
+    db.execute(delete(KeywordDaily).where(KeywordDaily.day < stats_cutoff))
+    db.execute(delete(SearchQueryDaily).where(SearchQueryDaily.day < stats_cutoff))
     logger.info(
         "cleanup: %s items, %s raw day-dirs, %s fetch_runs, %s done + %s dead jobs, %s deliveries removed",
         len(old), raw_removed, runs, done_jobs, dead_jobs, deliveries,

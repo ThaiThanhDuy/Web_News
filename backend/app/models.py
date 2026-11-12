@@ -12,12 +12,13 @@ Groups:
 Tenants/users/subscriptions/RLS (phase 6) are not part of this schema yet.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -60,6 +61,9 @@ class Source(Base):
     # Source trust T in the ranking formula, 0..1.
     trust: Mapped[float] = mapped_column(Float, server_default="0.5")
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    # Topic slug for single-topic sources (e.g. an economy desk): their items
+    # skip the AI classify call and get this topic directly.
+    default_topic: Mapped[str | None] = mapped_column(String(50))
 
     fetch_interval_minutes: Mapped[int] = mapped_column(Integer, server_default="30")
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
@@ -190,6 +194,15 @@ class Item(Base):
     # folded keywords as "|iphone18|chipa20|" for #hashtag matching.
     search_text: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[str | None] = mapped_column(Text)
+    # Ranking inputs refreshed by maint jobs (see services/hotness.py):
+    # K = heat of the item's hottest trending keyword, E = engagement.
+    trend_score: Mapped[float | None] = mapped_column(Float)
+    engagement_score: Mapped[float | None] = mapped_column(Float)
+    # Public counters from the platform itself (YouTube statistics).
+    ext_views: Mapped[int | None] = mapped_column(BigInteger)
+    ext_likes: Mapped[int | None] = mapped_column(BigInteger)
+    ext_comments: Mapped[int | None] = mapped_column(BigInteger)
+    ext_metrics_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=utcnow
@@ -198,6 +211,18 @@ class Item(Base):
     source: Mapped["Source"] = relationship(back_populates="items")
     topic: Mapped["Topic | None"] = relationship()
     cluster: Mapped["ItemCluster | None"] = relationship(back_populates="items", foreign_keys=[cluster_id])
+
+
+class TopicItem(Base):
+    """Item ↔ topic links: the primary topic plus related ones (from the
+    summarize stage), so e.g. an economy-desk story about an AI startup is
+    also listed under AI and Startup."""
+
+    __tablename__ = "topic_items"
+
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), primary_key=True)
+    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id", ondelete="CASCADE"), primary_key=True, index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
 
 
 # ---------------------------------------------------------------------- AI
@@ -327,3 +352,72 @@ class Delivery(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ------------------------------------------------------------- analytics
+# Aggregates only: no user ids, no IPs. Keyword/search stats outlive the
+# items they came from (kept KEYWORD_STATS_RETENTION_DAYS) so trends can be
+# measured against a long baseline.
+
+
+class KeywordDaily(Base):
+    """How many enriched items (from how many sources) mentioned a keyword
+    on a day (Vietnam time, by publish date)."""
+
+    __tablename__ = "keyword_daily"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    keyword: Mapped[str] = mapped_column(String(200), primary_key=True)  # fold_tag form
+    display: Mapped[str] = mapped_column(String(200))
+    item_count: Mapped[int] = mapped_column(Integer)
+    source_count: Mapped[int] = mapped_column(Integer)
+
+
+class KeywordTrend(Base):
+    """Current trend per keyword: last-24h mentions vs its daily baseline."""
+
+    __tablename__ = "keyword_trends"
+
+    keyword: Mapped[str] = mapped_column(String(200), primary_key=True)
+    display: Mapped[str] = mapped_column(String(200))
+    recent_24h: Mapped[int] = mapped_column(Integer)
+    sources_24h: Mapped[int] = mapped_column(Integer)
+    baseline_daily: Mapped[float] = mapped_column(Float)
+    lift: Mapped[float] = mapped_column(Float)  # log2((recent+1)/(baseline+1))
+    heat: Mapped[float] = mapped_column(Float, index=True)  # 0..1
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class ItemEngagementHourly(Base):
+    """Anonymous reader interactions with an item, per hour."""
+
+    __tablename__ = "item_engagement_hourly"
+
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), primary_key=True)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, index=True)
+    impressions: Mapped[int] = mapped_column(Integer, server_default="0")
+    clicks: Mapped[int] = mapped_column(Integer, server_default="0")
+    tag_clicks: Mapped[int] = mapped_column(Integer, server_default="0")
+    push_opens: Mapped[int] = mapped_column(Integer, server_default="0")
+    # Sum over impressions of the typical CTR of the feed position each was
+    # shown at — clicks/expected_clicks corrects for position bias.
+    expected_clicks: Mapped[float] = mapped_column(Float, server_default="0")
+
+
+class FeedPositionStats(Base):
+    """Global impressions/clicks per feed position (1..POSITION_BUCKETS)."""
+
+    __tablename__ = "feed_position_stats"
+
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    impressions: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    clicks: Mapped[int] = mapped_column(BigInteger, server_default="0")
+
+
+class SearchQueryDaily(Base):
+    __tablename__ = "search_queries_daily"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    query: Mapped[str] = mapped_column(String(200), primary_key=True)  # folded
+    display: Mapped[str] = mapped_column(String(200))
+    count: Mapped[int] = mapped_column(Integer)

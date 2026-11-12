@@ -16,8 +16,10 @@ export interface SearchResult {
   tags: string[];
 }
 
-export async function searchApi(q: string, signal?: AbortSignal): Promise<SearchResult> {
-  const res = await fetch(`${API_BASE}/api/search?${new URLSearchParams({ q })}`, { signal });
+export async function searchApi(q: string, signal?: AbortSignal, lang?: string): Promise<SearchResult> {
+  const params = new URLSearchParams({ q });
+  if (lang) params.set("lang", lang);
+  const res = await fetch(`${API_BASE}/api/search?${params}`, { signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }

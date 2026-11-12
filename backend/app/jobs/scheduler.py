@@ -30,6 +30,9 @@ PERIODIC_JOBS: dict[str, int] = {
     "maint.hotness": settings.HOTNESS_RECOMPUTE_INTERVAL_SECONDS,
     "maint.reconcile": settings.RECONCILE_INTERVAL_SECONDS,
     "maint.cleanup": settings.CLEANUP_INTERVAL_SECONDS,
+    "maint.trends": settings.TRENDS_INTERVAL_SECONDS,
+    "maint.youtube_stats": settings.YOUTUBE_STATS_INTERVAL_SECONDS,
+    "maint.local_classifier_eval": settings.LOCAL_CLASSIFY_EVAL_INTERVAL_SECONDS,
 }
 
 

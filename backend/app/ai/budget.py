@@ -80,11 +80,19 @@ def reserve(model: str, tokens: int) -> None:
 
 
 def settle(model: str, reserved: int, actual: int) -> None:
-    """Replace the estimate with the real usage in the daily counter (the
-    minute bucket self-corrects within a minute)."""
+    """Replace the estimate with the real usage, in the daily counter and in
+    the minute bucket — estimates reserve the full max output (e.g. 1,200
+    tokens for a summary that really uses ~250), and leaving that unused
+    reservation in the bucket would throttle us well below the real limit."""
     delta = actual - reserved
-    if delta:
-        get_redis().incrby(_day_key(model), delta)
+    if not delta:
+        return
+    redis = get_redis()
+    redis.incrby(_day_key(model), delta)
+    bucket = f"llm:bucket:{model}"
+    if redis.exists(bucket):
+        # Refund (or charge) the difference; refill caps it at capacity.
+        redis.hincrbyfloat(bucket, "tokens", -delta)
 
 
 def refund(model: str, reserved: int) -> None:

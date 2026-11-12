@@ -8,6 +8,7 @@
 
 import logging
 import re
+from typing import Literal
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -81,6 +82,7 @@ def _top_tags(keyword_lists: list[list[str]], limit: int, must_contain: list[str
 def search(
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=50),
+    lang: Literal["vi", "en"] | None = Query(None, description="Only items in this language"),
     db: Session = Depends(get_db),
 ):
     words, tags, plain_text = _parse(q.strip())
@@ -89,6 +91,8 @@ def search(
 
     # --- lexical: every word and every hashtag must match
     stmt = _visible(select(Item))
+    if lang:
+        stmt = stmt.where(Item.language == lang)
     for word in words:
         stmt = stmt.where(Item.search_text.ilike(_like(word), escape="\\"))
     for tag in tags:
@@ -126,6 +130,7 @@ def search(
                 db.execute(
                     _with_relations(_visible(select(Item)))
                     .where(
+                        *([Item.language == lang] if lang else []),
                         Item.embedding.is_not(None),
                         Item.id.notin_(exclude),
                         distance < settings.SEARCH_RELATED_MAX_DISTANCE,

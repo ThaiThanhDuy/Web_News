@@ -63,7 +63,7 @@ def status() -> None:
 
     if settings.LLM_PROVIDER == "groq":
         print("\nGroq tokens today (UTC):")
-        for model in sorted({settings.CLASSIFY_MODEL, settings.SUMMARIZE_MODEL, *settings.summarize_model_by_topic.values()}):
+        for model in sorted({settings.CLASSIFY_MODEL, settings.SUMMARIZE_MODEL, *settings.summarize_model_by_topic.values(), *settings.groq_fallback_models}):
             print(f"  {model:30} {budget.used_today(model)}/{settings.GROQ_DAILY_TOKEN_CAP}")
 
 

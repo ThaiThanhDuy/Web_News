@@ -18,6 +18,7 @@ const CATEGORY_ORDER = [
   "di-dong",
   "game",
   "startup",
+  "kinh-te",
   "mang-xa-hoi",
   "an-ninh-mang",
   "khoa-hoc",
@@ -123,7 +124,7 @@ function CategoryBubble({
       style={{ animationDelay: `${index * 35}ms` }}
       className={cn(
         // No border and no shadow: flat bubbles, only the icon carries color.
-        "group relative flex h-8 shrink-0 animate-bubble-in items-center rounded-full px-2 text-[13px] font-semibold",
+        "group relative flex h-8 shrink-0 animate-bubble-in items-center rounded-full px-2 text-[0.8125rem] font-semibold",
         "outline-none transition-[background-color,color,transform] duration-300 ease-out",
         "focus-visible:ring-2 focus-visible:ring-primary/60",
         "motion-reduce:animate-none motion-reduce:transition-none",

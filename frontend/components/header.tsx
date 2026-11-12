@@ -12,7 +12,7 @@ import type { Category } from "@/lib/types";
 export function Header({ categories }: { categories: Category[] }) {
   return (
     // Sticky (logo row + category row), solid background — no blur, no glow.
-    <header className="sticky top-0 z-30 border-b border-border bg-background">
+    <header className="sticky top-0 z-30 border-b border-border bg-background pt-[env(safe-area-inset-top)]">
       {/* md+: the two outer columns share the leftover width equally
           (flex-1 basis-0), keeping the search box exactly centered.
           Phones: logo left, search icon + actions right. */}
@@ -34,7 +34,7 @@ export function Header({ categories }: { categories: Category[] }) {
           <InstallButton />
           <PushNotifications categories={categories} />
           <ThemeToggle />
-          <SettingsMenu />
+          <SettingsMenu categories={categories} />
         </div>
       </div>
 

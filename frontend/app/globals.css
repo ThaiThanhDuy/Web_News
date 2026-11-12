@@ -50,6 +50,21 @@
   border-color: hsl(var(--border));
 }
 
+/* Fluid scale: the root font size grows with the viewport width — ~14px on
+   phones, 16px around 1280px, up to 18px on large monitors. Everything sized
+   in rem (all Tailwind spacing/text/sizes) scales with it. Expressed in rem,
+   so the reader's own browser font-size preference still applies. */
+html {
+  font-size: clamp(0.875rem, 0.8125rem + 0.25vw, 1.125rem);
+}
+
+/* Keep content clear of the notch / rounded corners in landscape when the
+   app runs edge-to-edge (viewport-fit=cover). */
+.container {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
 body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -222,4 +237,29 @@ button:focus-visible {
   inset: 0;
   background-image: linear-gradient(180deg, hsl(0 0% 100% / 0.35), hsl(0 0% 100% / 0) 55%);
   pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ dataviz
+   Chart roles for the /dashboard page. Series 1-2 are slots 1-2 of the
+   validated reference categorical palette (light/dark steps chosen for each
+   surface); meters use one blue ramp (track = light step, fill = mid step);
+   status colors are reserved for state and always ship with icon + label. */
+.viz-root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --meter-track: #cde2fb;
+  --meter-fill: #2a78d6;
+  --viz-grid: hsl(var(--foreground) / 0.08);
+  --viz-axis: hsl(var(--foreground) / 0.2);
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+}
+.dark .viz-root {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --meter-track: #184f95;
+  --meter-fill: #5598e7;
+  --viz-grid: hsl(var(--foreground) / 0.1);
+  --viz-axis: hsl(var(--foreground) / 0.25);
 }

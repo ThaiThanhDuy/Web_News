@@ -14,7 +14,7 @@
  *
  * Bump VERSION to invalidate every cache on the next deploy.
  */
-const VERSION = "v2";
+const VERSION = "v3";
 const PARAMS = new URL(self.location.href).searchParams;
 const DEV = PARAMS.get("dev") === "1";
 const API_BASE = PARAMS.get("api") || "";
@@ -146,8 +146,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Per-browser push state: always straight from the server.
-  if (url.pathname.startsWith("/api/push")) return;
+  // Per-browser push state and event beacons: always straight to the server.
+  if (url.pathname.startsWith("/api/push") || url.pathname.startsWith("/api/events")) return;
 
   // Backend API (may live on another origin, e.g. http://localhost:8000).
   if (url.pathname.startsWith("/api/")) {
@@ -183,6 +183,16 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const itemId = Number(String(event.notification.tag || "").replace(/^item-/, ""));
+  if (API_BASE && Number.isInteger(itemId) && itemId > 0) {
+    // Anonymous "push opened" counter (engagement signal for ranking).
+    fetch(`${API_BASE}/api/events`, {
+      method: "POST",
+      body: JSON.stringify({ events: [{ type: "push_open", item_id: itemId }] }),
+      headers: { "Content-Type": "text/plain" },
+      keepalive: true,
+    }).catch(() => {});
+  }
   const target = new URL((event.notification.data && event.notification.data.url) || "/", self.location.origin);
   event.waitUntil(
     (async () => {

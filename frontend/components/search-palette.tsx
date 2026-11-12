@@ -15,7 +15,9 @@ import {
   trendingApi,
   type SearchResult,
 } from "@/lib/search";
+import { langParam, readLangs } from "@/lib/settings";
 import { relativeTimeVi } from "@/lib/time";
+import { trackOpen, trackSearch } from "@/lib/track";
 import type { Article, Category } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -71,7 +73,7 @@ export function SearchLauncher() {
         aria-label="Tìm kiếm"
         aria-keyshortcuts="Control+K Meta+K"
         className={cn(
-          "flex h-8 items-center gap-2 rounded-lg bg-muted text-[13px] text-muted-foreground transition-colors",
+          "flex h-8 items-center gap-2 rounded-lg bg-muted text-[0.8125rem] text-muted-foreground transition-colors",
           "w-8 justify-center hover:text-foreground",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
           "md:w-64 md:justify-start md:px-3 md:hover:bg-muted/70 lg:w-96"
@@ -79,7 +81,7 @@ export function SearchLauncher() {
       >
         <Search className="h-4 w-4 shrink-0" />
         <span className="hidden flex-1 truncate text-left md:inline">Tìm tin, #hashtag, chủ đề…</span>
-        <kbd className="hidden rounded bg-background px-1.5 py-px font-sans text-[10px] font-medium text-muted-foreground md:inline">
+        <kbd className="hidden rounded bg-background px-1.5 py-px font-sans text-[0.625rem] font-medium text-muted-foreground md:inline">
           {shortcut}
         </kbd>
       </button>
@@ -143,11 +145,12 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
     setLoading(true);
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      searchApi(trimmed, controller.signal)
+      searchApi(trimmed, controller.signal, langParam(readLangs()))
         .then((data) => {
           setResult(data);
           setFailed(false);
           setActive(0);
+          trackSearch(trimmed);
         })
         .catch((err) => {
           if (err.name !== "AbortError") setFailed(true);
@@ -195,6 +198,7 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
       router.push(`/category/${entry.topic.slug}`);
       onClose();
     } else {
+      trackOpen(entry.article);
       window.open(entry.article.original_url, "_blank", "noopener,noreferrer");
     }
   };
@@ -266,13 +270,13 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-center bg-black/40 px-3 pt-[8vh] backdrop-blur-sm animate-fade-in motion-reduce:animate-none"
+      className="fixed inset-0 z-50 flex justify-center bg-black/40 px-3 pt-[8dvh] backdrop-blur-sm animate-fade-in motion-reduce:animate-none"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       role="dialog"
       aria-modal="true"
       aria-label="Tìm kiếm"
     >
-      <div className="flex h-fit max-h-[80vh] w-full max-w-2xl animate-palette-in flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/95 shadow-2xl shadow-primary/10 backdrop-blur-xl motion-reduce:animate-none">
+      <div className="flex h-fit max-h-[80dvh] w-full max-w-2xl animate-palette-in flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/95 shadow-2xl shadow-primary/10 backdrop-blur-xl motion-reduce:animate-none">
         {/* input */}
         <div className="flex items-center gap-3 border-b border-border/60 px-4">
           {loading ? (
@@ -307,7 +311,7 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
               <X className="h-4 w-4" />
             </button>
           )}
-          <kbd className="hidden rounded-md border border-border/70 bg-muted/60 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-muted-foreground sm:inline">
+          <kbd className="hidden rounded-md border border-border/70 bg-muted/60 px-1.5 py-0.5 font-sans text-[0.625rem] font-semibold text-muted-foreground sm:inline">
             Esc
           </kbd>
         </div>
@@ -326,7 +330,7 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
                         clearRecent();
                         setRecent([]);
                       }}
-                      className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                      className="text-[0.6875rem] font-medium text-muted-foreground hover:text-foreground"
                     >
                       Xóa
                     </button>
@@ -340,9 +344,6 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
                   <div className="flex flex-wrap gap-1.5">{queryChips(trendingEntries)}</div>
                 </Section>
               )}
-              <p className="px-1 text-xs text-muted-foreground">
-                Mẹo: gõ không dấu vẫn tìm được (“dien thoai”), thêm <b>#</b> để lọc theo hashtag, ví dụ <b>#iPhone</b>.
-              </p>
             </>
           )}
 
@@ -441,7 +442,7 @@ function SearchPalette({ initialQuery, onClose }: { initialQuery: string; onClos
         </div>
 
         {/* footer */}
-        <div className="hidden items-center gap-4 border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground sm:flex">
+        <div className="hidden items-center gap-4 border-t border-border/60 px-4 py-2 text-[0.6875rem] text-muted-foreground sm:flex">
           <span className="inline-flex items-center gap-1">
             <Kbd>↑</Kbd>
             <Kbd>↓</Kbd> chọn
@@ -475,7 +476,7 @@ function Section({
   return (
     <section className="animate-fade-in motion-reduce:animate-none">
       <div className="mb-1.5 flex items-center justify-between px-1">
-        <h3 className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <h3 className="inline-flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
           {icon}
           {title}
         </h3>
@@ -536,7 +537,7 @@ function ArticleRow({
             <Highlighted text={article.one_line_takeaway} query={query} />
           </span>
         )}
-        <span className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span className="mt-1 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
           <span className="font-medium text-foreground/70">{article.source.name}</span>
           <span>·</span>
           <span>{relativeTimeVi(article.published_at)}</span>
@@ -574,7 +575,7 @@ function Highlighted({ text, query }: { text: string; query: string }) {
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex min-w-[1.25rem] items-center justify-center rounded border border-border/70 bg-muted/60 px-1 py-px font-sans text-[10px] font-semibold">
+    <kbd className="inline-flex min-w-[1.25rem] items-center justify-center rounded border border-border/70 bg-muted/60 px-1 py-px font-sans text-[0.625rem] font-semibold">
       {children}
     </kbd>
   );

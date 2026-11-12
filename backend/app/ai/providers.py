@@ -37,6 +37,8 @@ class LLMProvider(Protocol):
 
     def model_for(self, stage: str, topic_slug: str | None = None) -> str: ...
 
+    def candidates(self, stage: str, topic_slug: str | None = None) -> list[str]: ...
+
     def chat_json(
         self, *, model: str, system: str, user: str, schema_name: str, schema: dict, max_output_tokens: int
     ) -> LLMResult: ...
@@ -59,6 +61,10 @@ class GroqProvider:
             return settings.summarize_model_by_topic[topic_slug]
         return settings.SUMMARIZE_MODEL
 
+    def candidates(self, stage: str, topic_slug: str | None = None) -> list[str]:
+        """The stage's own model first, then the backups (deduplicated)."""
+        return list(dict.fromkeys([self.model_for(stage, topic_slug), *settings.groq_fallback_models]))
+
     def chat_json(
         self, *, model: str, system: str, user: str, schema_name: str, schema: dict, max_output_tokens: int
     ) -> LLMResult:
@@ -78,7 +84,7 @@ class GroqProvider:
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                     "temperature": 0.3,
                     "max_completion_tokens": max_output_tokens,
-                    "reasoning_effort": settings.LLM_REASONING_EFFORT,
+                    "reasoning_effort": settings.reasoning_effort_by_model.get(model, settings.LLM_REASONING_EFFORT),
                     "response_format": {
                         "type": "json_schema",
                         "json_schema": {"name": schema_name, "strict": True, "schema": schema},
@@ -131,6 +137,9 @@ class OllamaProvider:
 
     def model_for(self, stage: str, topic_slug: str | None = None) -> str:
         return settings.OLLAMA_MODEL
+
+    def candidates(self, stage: str, topic_slug: str | None = None) -> list[str]:
+        return [settings.OLLAMA_MODEL]
 
     def chat_json(
         self, *, model: str, system: str, user: str, schema_name: str, schema: dict, max_output_tokens: int

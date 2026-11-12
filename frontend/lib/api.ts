@@ -38,7 +38,7 @@ export function getArticles(params: {
 }
 
 export function getCategories(): Promise<Category[]> {
-  return safeFetch<Category[]>(`/api/categories`, 3600, []);
+  return safeFetch<Category[]>(`/api/categories`, 300, []);
 }
 
 export function getSources(): Promise<Source[]> {

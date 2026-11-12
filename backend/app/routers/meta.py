@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models import Source, Topic
 from app.schemas import CategoryOut, SourceOut
@@ -16,9 +17,9 @@ def list_sources(db: Session = Depends(get_db)):
 
 @router.get("/categories", response_model=list[CategoryOut])
 def list_categories(db: Session = Depends(get_db)):
-    """Public topics (Hướng 1). Kept under the old /categories path."""
-    return (
-        db.execute(select(Topic).where(Topic.is_public.is_(True)).order_by(Topic.sort_order, Topic.name))
-        .scalars()
-        .all()
-    )
+    """Public topics the site follows (FOLLOWED_TOPICS). Kept under the old
+    /categories path."""
+    stmt = select(Topic).where(Topic.is_public.is_(True)).order_by(Topic.sort_order, Topic.name)
+    if settings.followed_topics:
+        stmt = stmt.where(Topic.slug.in_(settings.followed_topics))
+    return db.execute(stmt).scalars().all()

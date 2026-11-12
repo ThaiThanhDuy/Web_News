@@ -1,7 +1,7 @@
 # Tech Digest — Trang tin công nghệ tổng hợp bằng AI
 
-Tự động cào tin từ **VnExpress**, **GenK**, **VietnamNet**, **TechCrunch**, **Wired**, **Engadget** và
-một số kênh YouTube công nghệ. AI (Groq, `gpt-oss-20b`) phân loại rồi tóm tắt 3 ý chính bằng tiếng Việt.
+Tự động cào tin từ **VnExpress**, **GenK**, **VietnamNet**, **TechCrunch**, **Wired** và
+một số kênh YouTube công nghệ. AI (Groq: `gpt-oss-20b` phân loại, `gpt-oss-120b` tóm tắt) tạo 3 ý chính bằng tiếng Việt.
 Kết quả hiển thị dưới dạng feed 1 cột, cuộn vô hạn. Tin trùng giữa các nguồn được gộp lại, chỉ giữ bản
 từ nguồn uy tín hơn. Mỗi bài có link thẳng về bài gốc. Web là PWA: cài được lên điện thoại, đọc lại tin
 đã xem khi offline, và nhận thông báo đẩy (Web Push) theo chuyên mục.
@@ -27,7 +27,7 @@ một transaction**, nên không có chuyện lưu dữ liệu xong mà mất jo
 | `parse` | `parse.item` | Chuẩn hóa, nhận diện ngôn ngữ, chống trùng chính xác (SHA-256) |
 | `filter` | `filter.item` | Lọc rule, chống gần trùng (SimHash), embedding + gom cụm cùng sự kiện |
 | `ai_fast` | `ai.classify` | `gpt-oss-20b`: chuyên mục, độ liên quan, sắc thái |
-| `ai_deep` | `ai.summarize` | `gpt-oss-20b`: 3 ý chính, câu tóm tắt, từ khóa |
+| `ai_deep` | `ai.summarize` | `gpt-oss-120b`: 3 ý chính, câu tóm tắt, từ khóa |
 | `deliver` | `deliver.fanout`, `deliver.send` | Web Push theo chuyên mục đã đăng ký |
 | `maintenance` | `maint.*` | Trả job hết lease, tính lại điểm hot, xóa dữ liệu hết hạn, reconcile |
 
@@ -43,7 +43,9 @@ Mỗi loại nguồn là một connector cùng interface (`validate` / `fetch` /
 
 | Nguồn | Connector | Ghi chú |
 | --- | --- | --- |
-| VnExpress, GenK, TechCrunch, Wired, Engadget | `rss` | GenK cần User-Agent kiểu trình duyệt (đã xử lý) |
+| VnExpress, GenK, TechCrunch, Wired | `rss` | GenK cần User-Agent kiểu trình duyệt (đã xử lý) |
+| Kinh tế trong nước: VnExpress Kinh doanh, Thanh Niên Kinh tế, Dân trí Kinh doanh, VnEconomy, CafeF | `rss` | `default_topic: kinh-te` — bỏ qua bước AI phân loại |
+| Kinh tế quốc tế: CNBC, The Guardian Business, NYT Business, BBC Business, MarketWatch | `rss` | Như trên. `robots.txt` của MarketWatch cấm tải trang bài → chỉ tóm tắt từ mô tả trong feed |
 | VietnamNet | `vietnamnet_jsonld` | RSS của VietnamNet bị đứng; đọc JSON-LD `ItemList` trên trang chuyên mục |
 | Kênh YouTube | `youtube_api` | `robots.txt` của YouTube cấm `/feeds/videos.xml`, nên dùng YouTube Data API (cần `YOUTUBE_API_KEY`, 1 đơn vị quota mỗi lần) |
 
@@ -56,18 +58,50 @@ Mỗi loại nguồn là một connector cùng interface (`validate` / `fetch` /
 
 ### AI và hạn mức Groq
 
-Hai bước đều dùng `openai/gpt-oss-20b` với JSON Schema `strict` và `reasoning_effort=low`. Mỗi kết quả
-được lưu vào `enrichments`, gắn với một `pipeline_versions` ghi rõ prompt, schema, provider và model đã
-tạo ra nó. Có thể chọn model tóm tắt riêng cho từng chuyên mục bằng `SUMMARIZE_MODEL_BY_TOPIC`.
+Phân loại dùng `openai/gpt-oss-20b`, tóm tắt dùng `openai/gpt-oss-120b`, đều với JSON Schema `strict` và
+`reasoning_effort=low`. Mỗi kết quả được lưu vào `enrichments`, gắn với một `pipeline_versions` ghi rõ prompt,
+schema, provider và model đã tạo ra nó. Có thể chọn model tóm tắt riêng cho từng chuyên mục bằng
+`SUMMARIZE_MODEL_BY_TOPIC`.
 
-Worker tự giữ hạn mức trước khi gọi Groq (token bucket theo phút + trần theo ngày, trong Redis). Khi hết
-hạn mức, job được **hẹn lại chứ không bị tính là lỗi**, và luồng của queue đó tạm nghỉ. Không bài nào bị bỏ
-vì hết hạn mức; bài mới nhất được xử lý trước.
+Worker tự giữ hạn mức trước khi gọi Groq (token bucket theo phút + trần theo ngày, trong Redis, **tính riêng
+cho từng model**). Khi hết hạn mức, job được **hẹn lại chứ không bị tính là lỗi**, và luồng của queue đó tạm
+nghỉ. Không bài nào bị bỏ vì hết hạn mức; bài mới nhất được xử lý trước.
 
-Đo thực tế: phân loại ≈ 1.750 token/bài, tóm tắt ≈ 1.280 token/bài, tức ≈ 3.000 token/bài. Với trần
-`GROQ_DAILY_TOKEN_CAP=160000` của gói miễn phí, một model xử lý đầy đủ được **khoảng 50 bài/ngày**.
-Nếu lượng tin vào nhiều hơn, tồn đọng sẽ tăng: chuyển Groq trả phí, hoặc tách bước tóm tắt sang model
-khác (mỗi model có hạn mức riêng), hoặc đặt `AI_MIN_RELEVANCE` để bỏ tóm tắt tin ít quan trọng.
+Đo thực tế: phân loại ≈ 1.750 token/bài, tóm tắt ≈ 1.500 token/bài. Vì hạn mức Groq tính theo model, tách
+hai bước sang hai model cho mỗi bước một ngân sách riêng: với trần `GROQ_DAILY_TOKEN_CAP=160000`, khoảng
+**90 bài/ngày** được xử lý đầy đủ (dùng chung một model chỉ khoảng 50). Nếu đặt hai bước cùng một model, bước
+phân loại tự nhường khi có bài chờ tóm tắt, để bài đã bắt đầu được xử lý xong trước. Muốn nhiều hơn: Groq
+trả phí, hoặc đặt `AI_MIN_RELEVANCE` để bỏ tóm tắt tin ít quan trọng.
+
+**Nguồn một lĩnh vực:** nguồn có `default_topic` trong `app/constants.py` (các trang kinh tế) gán thẳng lĩnh vực
+cho mọi tin, **bỏ qua bước AI phân loại** (tiết kiệm khoảng 1.000–1.750 token/tin). Độ liên quan và sắc thái lấy từ
+bước tóm tắt (schema tóm tắt trả thêm hai trường này).
+
+**Tiết kiệm token (phần chạy bằng CPU, không gọi AI):**
+- `services/compress.py`: trước khi gửi cho AI, nội dung bài được làm sạch (bỏ link, "Xem thêm", chú thích ảnh,
+  hashtag, mốc thời gian/link tài trợ trong mô tả YouTube) và rút gọn (giữ phần mở đầu và các câu sát tiêu đề nhất)
+  xuống `SUMMARIZE_MAX_CONTENT_CHARS` (2.400) / `CLASSIFY_MAX_CONTENT_CHARS` (1.200) ký tự. Trung bình ít hơn
+  khoảng 31% ký tự cho bước tóm tắt.
+- `services/local_classifier.py`: phân loại chuyên mục bằng kNN trên embedding, học từ nhãn AI đã gắn. **Tự kiểm
+  định** mỗi 6 giờ (đánh giá bỏ-ra-một) và chỉ được dùng khi quyết định giữ/bỏ đúng ≥ 95%; tin không chắc chắn
+  vẫn hỏi AI. Trạng thái xem ở dashboard.
+- `AI_MAX_ITEM_AGE_HOURS` (72): tin quá cũ khi tới lượt AI bị lọc, không tốn token.
+- Đổi prompt phân loại xong, chạy `python scripts/eval_classify.py` để so sánh A/B với nhãn cũ.
+
+**Nhiều chuyên mục cho một tin:** bước tóm tắt trả thêm `related_topics` (0–3 chuyên mục bài cũng nói tới rõ ràng,
+gần như không tốn thêm token). Bảng `topic_items` lưu chuyên mục chính + chuyên mục phụ; trang chuyên mục liệt kê mọi
+tin gắn với nó. Ví dụ tin kinh tế về một startup AI gọi vốn hiện ở cả Kinh tế, AI và Startup; thẻ bài ghi "Cũng
+thuộc: …". Thông báo đẩy cũng khớp theo chuyên mục phụ.
+
+**Chỉ theo dõi một số lĩnh vực:** `FOLLOWED_TOPICS` (mặc định `ai,startup,phan-mem,phan-cung,kinh-te`). Tin được AI phân loại
+vào lĩnh vực khác bị đánh dấu `filtered` ngay sau bước phân loại, **không tốn token tóm tắt**, và thanh chuyên mục
+chỉ hiện các lĩnh vực được theo dõi. Sau khi đổi giá trị, chạy `python scripts/apply_followed_topics.py` để áp
+dụng cho tin đã có trong DB.
+
+**Model dự phòng:** `GROQ_FALLBACK_MODELS` (mặc định `qwen/qwen3.8-27b`). Khi model của một bước hết hạn mức
+phút hoặc ngày, bước đó tự chuyển sang model dự phòng (cũng có hạn mức riêng), nên thêm được khoảng 100 bài/ngày
+nữa. qwen chạy với `reasoning_effort=none` (`LLM_REASONING_EFFORT_BY_MODEL`). Mỗi enrichment ghi lại model đã
+thực sự xử lý, xem được ở bảng `pipeline_versions`.
 
 `LLM_PROVIDER=ollama` vẫn được giữ làm hướng mở rộng (chạy model tại chỗ qua `./start-ollama.sh`),
 cùng interface provider trong `app/ai/providers.py`.
@@ -78,7 +112,7 @@ cùng interface provider trong `app/ai/providers.py`.
 2. **Gần trùng:** SimHash 64 bit, khoảng cách Hamming ≤ `SIMHASH_MAX_DISTANCE` trong 48 giờ.
 3. **Cùng sự kiện:** embedding đa ngôn ngữ (khớp được tiếng Việt với tiếng Anh) + pgvector, gom vào
    `item_clusters`. Mỗi cụm chỉ hiện **một** bài: trong các bài đã xử lý xong, bài từ nguồn có
-   `priority` nhỏ nhất (TechCrunch 1 → Wired → Engadget → VnExpress → GenK → VietnamNet → YouTube).
+   `priority` nhỏ nhất (TechCrunch 1 → Wired → VnExpress → GenK → VietnamNet → YouTube).
    Bài cùng sự kiện từ nguồn kém ưu tiên hơn không tốn token AI.
 
 Embedding cần khoảng 0,5–1 GB RAM. Trên VPS nhỏ đặt `EMBEDDINGS_ENABLED=false`; bước 1 và 2 vẫn chạy.
@@ -86,12 +120,38 @@ Embedding cần khoảng 0,5–1 GB RAM. Trên VPS nhỏ đặt `EMBEDDINGS_ENAB
 ### Điểm Tin Nổi Bật
 
 ```text
-S = 100 × (0.30·R + 0.40·e^(−λΔt) + 0.10·T + 0.20·log(1+C)/log(1+5)),   λ = ln2 / 12h
+S = 100 · Σ wᵢ·xᵢ / Σ wᵢ   (chỉ trên các thành phần đang có dữ liệu)
+
+R  độ liên quan AI chấm (0–100)                         0.25
+F  độ mới e^(−λΔt), λ = ln2 / 12h                       0.30
+T  độ tin cậy nguồn (sources.trust)                     0.10
+C  số nguồn cùng đưa tin, log(1+C)/log(1+5)             0.10
+K  keyword đang lên: mức "nóng" của keyword nóng nhất   0.15
+E  tương tác: lượt mở so với kỳ vọng theo vị trí, và/hoặc
+   lượt xem/giờ của video YouTube (0,5 = bình thường)   0.10
 ```
 
-R là độ liên quan do AI chấm, Δt là số giờ từ khi đăng, T là độ tin cậy nguồn (`sources.trust`), C là số
-nguồn cùng đưa tin. Job `maint.hotness` tính lại mỗi 5 phút. Bài cũ hơn `ARTICLE_RETENTION_DAYS` (14)
-ngày bị xóa; dữ liệu thô sau `RAW_RETENTION_DAYS` (7) ngày.
+Job `maint.hotness` tính lại mỗi 5 phút (`app/services/hotness.py`, `ranking.py`). Bài cũ hơn
+`ARTICLE_RETENTION_DAYS` (14) ngày bị xóa; dữ liệu thô sau `RAW_RETENTION_DAYS` (7) ngày.
+
+**K — keyword đang lên** (`services/trends.py`, job `maint.trends` mỗi 10 phút): `keyword_daily` đếm mỗi keyword
+xuất hiện trong bao nhiêu tin, từ bao nhiêu nguồn, mỗi ngày, giữ `KEYWORD_STATS_RETENTION_DAYS` (180) ngày, lâu hơn
+bản thân tin. Mức nóng so số lần nhắc trong 24 giờ với mức nền 28 ngày; keyword phải được nhắc nhiều lần, từ hơn
+một nguồn, mới "nóng".
+
+**E — tương tác** (`services/engagement.py`, `POST /api/events`): trình duyệt gửi ẩn danh lượt hiển thị (≥ 50% thẻ
+bài trên màn hình trong 0,8 giây), lượt mở bài, bấm hashtag, mở thông báo và từ khóa tìm kiếm. Server chỉ lưu
+**số đếm** theo tin/giờ, theo vị trí trên feed và theo từ khóa/ngày: không lưu định danh hay IP (IP chỉ dùng tạm
+để giới hạn tần suất). Trình duyệt bật Do Not Track không gửi gì. Lượt mở được so với số lượt mở *kỳ vọng* ở
+những vị trí bài đã hiện, để bài đứng đầu không tự được lợi. E chỉ vào công thức khi trang có từ
+`ENGAGEMENT_MIN_DAILY_IMPRESSIONS` (300) lượt hiển thị/ngày; video YouTube có thêm lượt xem công khai (job
+`maint.youtube_stats`, 30 phút).
+
+**Cá nhân hóa** (`frontend/lib/interests.ts`): hồ sơ sở thích (chuyên mục, hashtag hay đọc; giảm dần với nửa đời
+14 ngày) chỉ nằm trong trình duyệt. Feed gửi kèm hồ sơ để server xếp lại phần tin nổi bật (điểm hot × (1 + mức
+hợp gu)) và đánh dấu "Hợp gu bạn"; server không lưu hồ sơ. Bật/tắt và xóa trong Cài đặt.
+
+Dashboard (`/dashboard`) có thêm: keyword đang lên, tương tác 24 giờ, tìm kiếm nhiều nhất 7 ngày.
 
 ### PWA và Web Push
 
@@ -205,7 +265,6 @@ frontend/
   `python scripts/pool.py fetch-now`.
 - **Một nguồn bị `paused`:** lỗi 5 lần liên tiếp (xem `last error` trong `pool.py status`). Sửa xong
   thì `pool.py fetch-now <slug>`.
-- **Engadget trả HTTP 202 rỗng:** trang chặn bot, được tính là lỗi và nguồn sẽ tự tạm dừng.
 - **Thông báo không đến:** cần HTTPS khi deploy (localhost là ngoại lệ), `VAPID_*` đã điền, và trên iOS
   phải mở app từ Màn hình chính.
 - Model embedding (~470 MB) tự tải từ Hugging Face lần đầu chạy.

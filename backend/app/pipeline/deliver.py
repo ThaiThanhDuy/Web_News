@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.jobs.errors import Reschedule
 from app.jobs.queue import ClaimedJob, enqueue
-from app.models import Delivery, Enrichment, Item, ItemStatus, PushSubscription
+from app.models import Delivery, Enrichment, Item, ItemStatus, PushSubscription, Topic, TopicItem
 from app.services import webpush
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,14 @@ def handle_fanout(db: Session, job: ClaimedJob) -> None:
     if item is None or item.status != ItemStatus.ENRICHED or item.is_duplicate or not webpush.is_configured():
         return
 
-    topic_slug = item.topic.slug if item.topic else None
+    # Every topic the item belongs to (primary + related) can match.
+    slugs = list(
+        db.execute(
+            select(Topic.slug).join(TopicItem, TopicItem.topic_id == Topic.id).where(TopicItem.item_id == item.id)
+        ).scalars()
+    ) or ([item.topic.slug] if item.topic else [])
     conditions = [PushSubscription.topics == []]
-    if topic_slug:
-        conditions.append(PushSubscription.topics.contains([topic_slug]))
+    conditions += [PushSubscription.topics.contains([slug]) for slug in slugs]
     subscriptions = db.execute(select(PushSubscription).where(or_(*conditions))).scalars().all()
 
     hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)

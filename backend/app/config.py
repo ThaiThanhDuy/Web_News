@@ -21,18 +21,25 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str = ""
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    # Model per pipeline stage. Both default to gpt-oss-20b: slower to drain
-    # a backlog on the free tier (both stages share one model's quota), but
-    # nothing is dropped — every item that passes the rule filter gets both
-    # a classification and a full summary.
+    # Model per pipeline stage. Groq quotas are per model, so putting the two
+    # stages on different models gives each its own daily budget: ~90 fully
+    # processed items/day on the free tier, vs ~50 when both share one model
+    # (then classify also yields to summarize so items still finish first).
     CLASSIFY_MODEL: str = "openai/gpt-oss-20b"
-    SUMMARIZE_MODEL: str = "openai/gpt-oss-20b"
+    SUMMARIZE_MODEL: str = "openai/gpt-oss-120b"
     # Optional per-topic override for the summarize stage, as JSON, e.g.
     # {"ai": "openai/gpt-oss-120b"}. Topics not listed use SUMMARIZE_MODEL.
     SUMMARIZE_MODEL_BY_TOPIC: str = ""
     # gpt-oss models "think" before answering; "low" cut completion tokens
     # ~5x in testing with no visible quality loss for these tasks.
     LLM_REASONING_EFFORT: str = "low"
+    # Per-model override, JSON. qwen3 supports "none" (no thinking tokens:
+    # ~25 output tokens for a classification instead of ~180).
+    LLM_REASONING_EFFORT_BY_MODEL: str = '{"qwen/qwen3.8-27b": "none"}'
+    # Backup models, comma-separated, tried in order when a stage's own model
+    # has used up its per-minute or daily quota (each Groq model has its own
+    # quota). Empty = no fallback.
+    GROQ_FALLBACK_MODELS: str = "qwen/qwen3.8-27b"
     # Groq limits are per model. Free tier: 8K tokens/minute, 200K/day.
     # The daily cap is kept a bit under Groq's own so we stop *before* 429s.
     GROQ_TPM_LIMIT: int = 8000
@@ -43,12 +50,31 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:14b-instruct"
 
-    # Characters of article body sent to each stage.
-    CLASSIFY_MAX_CONTENT_CHARS: int = 2000
-    SUMMARIZE_MAX_CONTENT_CHARS: int = 4000
+    # Characters of article body sent to each stage, after local cleaning +
+    # condensing (services/compress.py: lead + title-relevant sentences).
+    # Topic is clear from the title + lead; the summary needs a bit more.
+    CLASSIFY_MAX_CONTENT_CHARS: int = 1200
+    SUMMARIZE_MAX_CONTENT_CHARS: int = 2400
+    # Local (CPU) kNN topic classifier on embeddings: "auto" = used only while
+    # its own leave-one-out evaluation shows keep/drop accuracy ≥ the minimum
+    # (services/local_classifier.py); "off" = always ask the AI.
+    LOCAL_CLASSIFY: str = "auto"
+    LOCAL_CLASSIFY_K: int = 7
+    LOCAL_CLASSIFY_MIN_SHARE: float = 0.8
+    LOCAL_CLASSIFY_MIN_SIMILARITY: float = 0.35
+    LOCAL_CLASSIFY_MIN_ACCURACY: float = 0.95
+    LOCAL_CLASSIFY_MIN_DECIDED: int = 30
+    LOCAL_CLASSIFY_EVAL_INTERVAL_SECONDS: int = 6 * 3600
+    # Items older than this (by publish time) when their AI turn comes are
+    # dropped instead of spending tokens on stale news. 0 = no limit.
+    AI_MAX_ITEM_AGE_HOURS: int = 72
     # Items classified below this relevance (0-100) skip summarization.
     # 0 = summarize everything ("đầy đủ dữ liệu").
     AI_MIN_RELEVANCE: int = 0
+    # Topics the site follows, comma-separated slugs (empty = all). Items the
+    # classifier puts in any other topic are dropped right after classifying,
+    # so they never cost summarize tokens, and other topics leave the menu.
+    FOLLOWED_TOPICS: str = "ai,startup,phan-mem,phan-cung,kinh-te"
 
     # ---------------------------------------------------------- embeddings
     # Sentence-transformers model for same-story clustering. Needs ~0.5-1GB
@@ -110,6 +136,20 @@ class Settings(BaseSettings):
     FEED_HOT_WINDOW_HOURS: int = 48
     HOTNESS_RECOMPUTE_INTERVAL_SECONDS: int = 300
     ARTICLE_RETENTION_DAYS: int = 14
+
+    # ------------------------------------------------- hot-news analytics
+    # Keyword/search daily aggregates outlive items so trends have a baseline.
+    KEYWORD_STATS_RETENTION_DAYS: int = 180
+    TREND_BASELINE_DAYS: int = 28
+    TRENDS_INTERVAL_SECONDS: int = 600
+    YOUTUBE_STATS_INTERVAL_SECONDS: int = 1800
+    # Reader engagement (anonymous counters) over this window feeds ranking...
+    ENGAGEMENT_WINDOW_HOURS: int = 48
+    # ...but only once the site has real traffic: below this many feed
+    # impressions in the last 24h, engagement is left out of the formula.
+    ENGAGEMENT_MIN_DAILY_IMPRESSIONS: int = 300
+    # Per-client-IP rate limit on /api/events (the IP is never stored).
+    EVENTS_MAX_PER_MINUTE: int = 300
     CLEANUP_INTERVAL_SECONDS: int = 3600
     RECONCILE_INTERVAL_SECONDS: int = 300
 
@@ -128,6 +168,9 @@ class Settings(BaseSettings):
     PUSH_TTL_SECONDS: int = 6 * 3600
 
     CORS_ORIGINS: str = "http://localhost:3000"
+    # Read-only operations dashboard (/api/dashboard/*, page /dashboard). It
+    # has no login yet — set false on any deployment others can reach.
+    DASHBOARD_ENABLED: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -143,6 +186,24 @@ class Settings(BaseSettings):
             return {}
         data = json.loads(self.SUMMARIZE_MODEL_BY_TOPIC)
         return {str(k): str(v) for k, v in data.items()}
+
+    @property
+    def reasoning_effort_by_model(self) -> dict[str, str]:
+        if not self.LLM_REASONING_EFFORT_BY_MODEL.strip():
+            return {}
+        return {str(k): str(v) for k, v in json.loads(self.LLM_REASONING_EFFORT_BY_MODEL).items()}
+
+    @property
+    def followed_topics(self) -> list[str]:
+        return [t.strip() for t in self.FOLLOWED_TOPICS.split(",") if t.strip()]
+
+    def follows_topic(self, slug: str | None) -> bool:
+        followed = self.followed_topics
+        return not followed or (slug is not None and slug in followed)
+
+    @property
+    def groq_fallback_models(self) -> list[str]:
+        return [m.strip() for m in self.GROQ_FALLBACK_MODELS.split(",") if m.strip()]
 
     @property
     def worker_queue_threads(self) -> dict[str, int]:

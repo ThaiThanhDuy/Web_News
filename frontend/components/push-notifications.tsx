@@ -159,9 +159,6 @@ export function PushNotifications({ categories }: { categories: Category[] }) {
           <div className="glass-card space-y-3 rounded-2xl bg-background/95 p-4 shadow-xl">
             <div>
               <div className="text-sm font-bold">Thông báo tin nóng</div>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Nhận thông báo khi có tin quan trọng, tối đa vài tin mỗi giờ.
-              </p>
             </div>
 
             {availability === "loading" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}

@@ -68,7 +68,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <AuroraBackground />
         <div className="relative z-10 flex min-h-screen flex-col">
           <Header categories={categories} />
-          <main className="container flex-1 py-8">{children}</main>
+          <main className="container flex-1 py-4 sm:py-8">{children}</main>
         </div>
 
         <BackToTop />
