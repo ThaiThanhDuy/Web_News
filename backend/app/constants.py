@@ -7,6 +7,8 @@ Per source:
   trust                   source trust T (0..1) in the ranking formula
   fetch_interval_minutes  how often the scheduler enqueues a fetch for it
   default_topic           (optional) topic for every item: skips the AI classify call
+  is_active               (optional, default True) False = not fetched and its items hidden;
+                          flip back to True to resume (nothing is deleted)
 """
 
 SOURCES = [
@@ -91,6 +93,8 @@ SOURCES = [
         "priority": 7,
         "trust": 0.6,
         "fetch_interval_minutes": 120,
+        # Temporarily paused (connector kept): not fetched, items hidden.
+        "is_active": False,
     },
     {
         "slug": "yt-duyluandethuong",
@@ -103,6 +107,8 @@ SOURCES = [
         "priority": 8,
         "trust": 0.6,
         "fetch_interval_minutes": 120,
+        # Temporarily paused (connector kept): not fetched, items hidden.
+        "is_active": False,
     },
     {
         "slug": "yt-taixaitech",
@@ -115,6 +121,8 @@ SOURCES = [
         "priority": 9,
         "trust": 0.6,
         "fetch_interval_minutes": 120,
+        # Temporarily paused (connector kept): not fetched, items hidden.
+        "is_active": False,
     },
     {
         "slug": "yt-thinkview",
@@ -127,6 +135,8 @@ SOURCES = [
         "priority": 10,
         "trust": 0.6,
         "fetch_interval_minutes": 120,
+        # Temporarily paused (connector kept): not fetched, items hidden.
+        "is_active": False,
     },
     # ---- Economy desks (default_topic: no AI classify call for their items).
     # Lower priority than the tech outlets, so a tech story covered by both

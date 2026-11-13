@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.connectors.http import polite_get
-from app.models import Item, ItemStatus
+from app.models import Item, ItemStatus, Source
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,14 @@ def refresh(db: Session) -> int:
         return 0
     since = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
     items = db.execute(
-        select(Item).where(Item.item_type == "video", Item.status == ItemStatus.ENRICHED, Item.published_at >= since)
+        select(Item)
+        .join(Source, Source.id == Item.source_id)
+        .where(
+            Item.item_type == "video",
+            Item.status == ItemStatus.ENRICHED,
+            Item.published_at >= since,
+            Source.is_active.is_(True),  # paused channels: no API quota spent
+        )
     ).scalars().all()
     by_id = {vid: item for item in items if (vid := video_id(item.url))}
     ids = list(by_id)

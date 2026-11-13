@@ -91,6 +91,11 @@ def _too_old(item: Item) -> bool:
 
 
 def _drop_if_too_old(item: Item) -> bool:
+    """Also drops items of paused sources (is_active=False): no tokens."""
+    if not item.source.is_active:
+        item.status = ItemStatus.FILTERED
+        item.status_reason = f"source paused: {item.source.slug}"
+        return True
     if not _too_old(item):
         return False
     item.status = ItemStatus.FILTERED

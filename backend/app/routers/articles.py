@@ -25,6 +25,8 @@ def _visible(stmt: Select) -> Select:
         Item.status == ItemStatus.ENRICHED,
         Item.is_duplicate.is_(False),
         Item.published_at >= retention_cutoff,
+        # Paused sources (is_active=False) are hidden, not deleted.
+        Item.source_id.in_(select(Source.id).where(Source.is_active.is_(True))),
     )
 
 

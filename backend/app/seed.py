@@ -21,7 +21,9 @@ _SOURCE_FIELDS = (
     "trust",
     "fetch_interval_minutes",
     "default_topic",
+    "is_active",
 )
+_DEFAULTS = {"is_active": True}
 
 
 def seed_sources_and_topics(db: Session) -> None:
@@ -29,10 +31,10 @@ def seed_sources_and_topics(db: Session) -> None:
     for src in SOURCES:
         existing = existing_sources.get(src["slug"])
         if existing is None:
-            db.add(Source(**{field: src.get(field) for field in ("slug", *_SOURCE_FIELDS)}))
+            db.add(Source(**{field: src.get(field, _DEFAULTS.get(field)) for field in ("slug", *_SOURCE_FIELDS)}))
             continue
         for field in _SOURCE_FIELDS:
-            setattr(existing, field, src.get(field))
+            setattr(existing, field, src.get(field, _DEFAULTS.get(field)))
 
     existing_topics = {t.slug: t for t in db.query(Topic).all()}
     for order, topic in enumerate(TOPICS):
